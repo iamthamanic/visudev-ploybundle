@@ -284,6 +284,9 @@ export function startApp(workspaceDir, port, config) {
   child.__visudevSupabaseDetected = supabaseDetected;
   child.stdout?.on("data", (d) => runtimeDeps.stdoutWrite(`[preview ${port}] ${d}`));
   child.stderr?.on("data", (d) => runtimeDeps.stderrWrite(`[preview ${port}] ${d}`));
-  child.on("error", (err) => runtimeDeps.error(`[preview ${port}] error:`, err));
+  child.on("error", (err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    runtimeDeps.error(`[preview ${port}] error: ${message}`);
+  });
   return child;
 }
