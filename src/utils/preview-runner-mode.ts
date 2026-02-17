@@ -1,5 +1,6 @@
 import type { PreviewMode } from "../lib/visudev/types";
 import { getPreviewRunnerClientDeps } from "./preview-runner-deps";
+import { logPreviewRunnerClientError } from "./preview-runner-log";
 
 /** When set (e.g. http://localhost:4000), frontend calls the Preview Runner directly; no Edge Function or Supabase secret needed. In dev we default to localhost:4000 so "npm run dev" works without .env. */
 const localRunnerUrl =
@@ -16,7 +17,8 @@ function normalizeRunnerUrl(url: string): string | null {
     const parsed = new URL(trimmed);
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
     return `${parsed.protocol}//${parsed.host}`;
-  } catch {
+  } catch (error) {
+    logPreviewRunnerClientError("invalid runner URL", error);
     return null;
   }
 }
@@ -38,7 +40,8 @@ function getDiscoveredRunnerUrl(): string | null {
       return null;
     }
     return normalized;
-  } catch {
+  } catch (error) {
+    logPreviewRunnerClientError("read discovered runner URL failed", error);
     return null;
   }
 }
@@ -57,8 +60,8 @@ export function setDiscoveredRunnerUrl(url: string): void {
       return;
     }
     storage.setItem(DISCOVERED_RUNNER_KEY, normalized);
-  } catch {
-    // ignore storage write errors
+  } catch (error) {
+    logPreviewRunnerClientError("write discovered runner URL failed", error);
   }
 }
 

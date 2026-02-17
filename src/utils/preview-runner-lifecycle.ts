@@ -1,5 +1,6 @@
 import type { PreviewRuntimeOptions } from "../lib/visudev/types";
 import { getPreviewRunnerClientDeps } from "./preview-runner-deps";
+import { enforceRunnerActionCooldown, getCurrentRunnerRunId } from "./preview-runner-guards";
 import { getEffectiveRunnerUrl } from "./preview-runner-mode";
 import {
   parseRunnerError,
@@ -8,36 +9,20 @@ import {
   parseRunnerStatusPayload,
   warnRunnerOnce,
 } from "./preview-runner-parser";
-import { claimPreviewRunnerAction } from "./preview-runner-rate-limit";
 import {
   clearPreviewSession,
-  getStoredRunId,
   runnerHeaders,
   setStoredProjectToken,
   setStoredRunId,
 } from "./preview-runner-session";
 import { requestRunnerWithDiscovery } from "./preview-runner-transport";
 import type { PreviewStepLog } from "./preview-runner-types";
-import { sanitizeProjectId, sanitizeRunId } from "./preview-runner-validation";
+import { sanitizeProjectId } from "./preview-runner-validation";
 
+const START_COOLDOWN_MS = 3000;
+const STOP_COOLDOWN_MS = 1500;
 const REFRESH_COOLDOWN_MS = 3000;
 const STOP_PROJECT_COOLDOWN_MS = 2000;
-
-function rateLimitError(action: string, retryAfterMs: number): string {
-  const seconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
-  return `${action} derzeit gedrosselt. Bitte in ${seconds}s erneut versuchen.`;
-}
-
-function getCurrentRunId(projectId: string): string | null {
-  const runId = getStoredRunId(projectId);
-  if (!runId) return null;
-  const validRunId = sanitizeRunId(runId);
-  if (!validRunId) {
-    clearPreviewSession(projectId);
-    return null;
-  }
-  return validRunId;
-}
 
 export async function localPreviewStart(
   projectId: string,
@@ -51,6 +36,15 @@ export async function localPreviewStart(
 ): Promise<{ success: boolean; data?: { runId: string; status: string }; error?: string }> {
   const validProjectId = sanitizeProjectId(projectId);
   if (!validProjectId) return { success: false, error: "Ungültige Projekt-ID." };
+
+  const startRateLimitError = enforceRunnerActionCooldown(
+    validProjectId,
+    "start",
+    START_COOLDOWN_MS,
+    "Start",
+  );
+  if (startRateLimitError) return { success: false, error: startRateLimitError };
+
   const deps = getPreviewRunnerClientDeps();
   const base = getEffectiveRunnerUrl().replace(/\/$/, "");
   const body = JSON.stringify({
@@ -68,29 +62,27 @@ export async function localPreviewStart(
       headers: runnerHeaders(validProjectId, true),
       body,
     });
-    const text = await res.text();
-    return { res, text };
+    return { res, text: await res.text() };
   };
+
   const request = await requestRunnerWithDiscovery(base, "Runner /start", doFetch);
-  if (!request.ok) {
-    return { success: false, error: request.error };
-  }
+  if (!request.ok) return { success: false, error: request.error };
+
   const payload = parseRunnerJsonText(request.text, "Runner /start response");
-  if (payload == null) {
-    return { success: false, error: "Runner response not JSON" };
-  }
+  if (payload == null) return { success: false, error: "Runner response not JSON" };
   if (!request.res.ok) {
     return { success: false, error: parseRunnerError(payload, request.res.status) };
   }
+
   const parsed = parseRunnerStartPayload(payload);
   if (!parsed) {
     warnRunnerOnce("Runner /start response missing required fields");
     return { success: false, error: "Runner response missing required start fields." };
   }
+
   setStoredRunId(validProjectId, parsed.runId);
-  if (parsed.projectToken) {
-    setStoredProjectToken(validProjectId, parsed.projectToken);
-  }
+  if (parsed.projectToken) setStoredProjectToken(validProjectId, parsed.projectToken);
+
   return { success: true, data: { runId: parsed.runId, status: parsed.status } };
 }
 
@@ -103,25 +95,24 @@ export async function localPreviewStatus(projectId: string): Promise<{
 }> {
   const validProjectId = sanitizeProjectId(projectId);
   if (!validProjectId) return { success: false, error: "Ungültige Projekt-ID." };
-  const runId = getCurrentRunId(validProjectId);
+
+  const runId = getCurrentRunnerRunId(validProjectId);
   if (!runId) return { success: true, status: "idle" };
+
   const deps = getPreviewRunnerClientDeps();
   const base = getEffectiveRunnerUrl().replace(/\/$/, "");
   const doFetch = async (urlBase: string): Promise<{ res: Response; text: string }> => {
     const res = await deps.fetch(`${urlBase}/status/${encodeURIComponent(runId)}`, {
       headers: runnerHeaders(validProjectId),
     });
-    const text = await res.text();
-    return { res, text };
+    return { res, text: await res.text() };
   };
+
   const request = await requestRunnerWithDiscovery(base, "Runner /status", doFetch);
-  if (!request.ok) {
-    return { success: false, error: request.error };
-  }
+  if (!request.ok) return { success: false, error: request.error };
+
   const payload = parseRunnerJsonText(request.text, "Runner /status response");
-  if (payload == null) {
-    return { success: false, error: "Runner response not JSON" };
-  }
+  if (payload == null) return { success: false, error: "Runner response not JSON" };
   if (!request.res.ok) {
     if (request.res.status === 404 || request.res.status === 401 || request.res.status === 403) {
       clearPreviewSession(validProjectId);
@@ -129,14 +120,14 @@ export async function localPreviewStatus(projectId: string): Promise<{
     }
     return { success: false, error: parseRunnerError(payload, request.res.status) };
   }
+
   const parsed = parseRunnerStatusPayload(payload);
   if (!parsed) {
     warnRunnerOnce("Runner /status response missing required fields");
     return { success: false, error: "Runner response missing required status fields." };
   }
-  if (parsed.status === "idle") {
-    clearPreviewSession(validProjectId);
-  }
+  if (parsed.status === "idle") clearPreviewSession(validProjectId);
+
   return {
     success: true,
     status: parsed.status,
@@ -148,11 +139,24 @@ export async function localPreviewStatus(projectId: string): Promise<{
 
 export async function localPreviewStop(
   projectId: string,
+  options?: { skipCooldown?: boolean },
 ): Promise<{ success: boolean; error?: string }> {
   const validProjectId = sanitizeProjectId(projectId);
   if (!validProjectId) return { success: false, error: "Ungültige Projekt-ID." };
-  const runId = getCurrentRunId(validProjectId);
+
+  if (!options?.skipCooldown) {
+    const stopRateLimitError = enforceRunnerActionCooldown(
+      validProjectId,
+      "stop",
+      STOP_COOLDOWN_MS,
+      "Stop",
+    );
+    if (stopRateLimitError) return { success: false, error: stopRateLimitError };
+  }
+
+  const runId = getCurrentRunnerRunId(validProjectId);
   if (!runId) return { success: true };
+
   const deps = getPreviewRunnerClientDeps();
   const base = getEffectiveRunnerUrl().replace(/\/$/, "");
   const doFetch = async (urlBase: string): Promise<{ res: Response; text: string }> => {
@@ -160,27 +164,23 @@ export async function localPreviewStop(
       method: "POST",
       headers: runnerHeaders(validProjectId),
     });
-    const text = await res.text();
-    return { res, text };
+    return { res, text: await res.text() };
   };
+
   const request = await requestRunnerWithDiscovery(base, "Runner /stop", doFetch);
-  if (!request.ok) {
-    return { success: false, error: request.error };
-  }
+  if (!request.ok) return { success: false, error: request.error };
+
   const payload = parseRunnerJsonText(request.text, "Runner /stop response");
-  if (payload == null) {
-    return { success: false, error: "Runner response not JSON" };
-  }
+  if (payload == null) return { success: false, error: "Runner response not JSON" };
   if (!request.res.ok) {
     if (request.res.status === 404 || request.res.status === 401 || request.res.status === 403) {
       clearPreviewSession(validProjectId);
-      if (request.res.status === 404) {
-        return { success: true };
-      }
+      if (request.res.status === 404) return { success: true };
       return { success: false, error: parseRunnerError(payload, request.res.status) };
     }
     return { success: false, error: parseRunnerError(payload, request.res.status) };
   }
+
   clearPreviewSession(validProjectId);
   return { success: true };
 }
@@ -190,15 +190,16 @@ export async function localPreviewStopProject(
 ): Promise<{ success: boolean; error?: string }> {
   const validProjectId = sanitizeProjectId(projectId);
   if (!validProjectId) return { success: false, error: "Ungültige Projekt-ID." };
-  const cooldown = claimPreviewRunnerAction(
+
+  const stopProjectRateLimitError = enforceRunnerActionCooldown(
     validProjectId,
     "stop-project",
     STOP_PROJECT_COOLDOWN_MS,
+    "Stop-Project",
   );
-  if (!cooldown.ok) {
-    return { success: false, error: rateLimitError("Stop-Project", cooldown.retryAfterMs) };
-  }
-  const runId = getCurrentRunId(validProjectId);
+  if (stopProjectRateLimitError) return { success: false, error: stopProjectRateLimitError };
+
+  const runId = getCurrentRunnerRunId(validProjectId);
   const deps = getPreviewRunnerClientDeps();
   const base = getEffectiveRunnerUrl().replace(/\/$/, "");
   const doFetch = async (urlBase: string): Promise<{ res: Response; text: string }> => {
@@ -206,29 +207,27 @@ export async function localPreviewStopProject(
       method: "POST",
       headers: runnerHeaders(validProjectId),
     });
-    const text = await res.text();
-    return { res, text };
+    return { res, text: await res.text() };
   };
+
   const request = await requestRunnerWithDiscovery(base, "Runner /stop-project", doFetch);
   if (!request.ok) {
-    if (runId) return localPreviewStop(validProjectId);
+    if (runId) return localPreviewStop(validProjectId, { skipCooldown: true });
     return { success: false, error: request.error };
   }
+
   const payload = parseRunnerJsonText(request.text, "Runner /stop-project response");
-  if (payload == null) {
-    return { success: false, error: "Runner response not JSON" };
-  }
+  if (payload == null) return { success: false, error: "Runner response not JSON" };
   if (request.res.status === 404 || request.res.status === 401 || request.res.status === 403) {
-    if (runId) return localPreviewStop(validProjectId);
+    if (runId) return localPreviewStop(validProjectId, { skipCooldown: true });
     clearPreviewSession(validProjectId);
-    if (request.res.status === 404) {
-      return { success: true };
-    }
+    if (request.res.status === 404) return { success: true };
     return { success: false, error: parseRunnerError(payload, request.res.status) };
   }
   if (!request.res.ok) {
     return { success: false, error: parseRunnerError(payload, request.res.status) };
   }
+
   clearPreviewSession(validProjectId);
   return { success: true };
 }
@@ -239,17 +238,23 @@ export async function localPreviewRefresh(
 ): Promise<{ success: boolean; error?: string }> {
   const validProjectId = sanitizeProjectId(projectId);
   if (!validProjectId) return { success: false, error: "Ungültige Projekt-ID." };
-  const runId = getCurrentRunId(validProjectId);
+
+  const runId = getCurrentRunnerRunId(validProjectId);
   if (!runId) {
     return {
       success: false,
       error: "Kein aktiver Preview für dieses Projekt (Seite neu laden und Preview neu starten).",
     };
   }
-  const cooldown = claimPreviewRunnerAction(validProjectId, "refresh", REFRESH_COOLDOWN_MS);
-  if (!cooldown.ok) {
-    return { success: false, error: rateLimitError("Refresh", cooldown.retryAfterMs) };
-  }
+
+  const refreshRateLimitError = enforceRunnerActionCooldown(
+    validProjectId,
+    "refresh",
+    REFRESH_COOLDOWN_MS,
+    "Refresh",
+  );
+  if (refreshRateLimitError) return { success: false, error: refreshRateLimitError };
+
   const deps = getPreviewRunnerClientDeps();
   const base = getEffectiveRunnerUrl().replace(/\/$/, "");
   const doFetch = async (urlBase: string): Promise<{ res: Response; text: string }> => {
@@ -262,22 +267,20 @@ export async function localPreviewRefresh(
         injectSupabasePlaceholders: options?.injectSupabasePlaceholders ?? undefined,
       }),
     });
-    const text = await res.text();
-    return { res, text };
+    return { res, text: await res.text() };
   };
+
   const request = await requestRunnerWithDiscovery(base, "Runner /refresh", doFetch);
-  if (!request.ok) {
-    return { success: false, error: request.error };
-  }
+  if (!request.ok) return { success: false, error: request.error };
+
   const payload = parseRunnerJsonText(request.text, "Runner /refresh response");
-  if (payload == null) {
-    return { success: false, error: "Runner response not JSON" };
-  }
+  if (payload == null) return { success: false, error: "Runner response not JSON" };
   if (!request.res.ok) {
     if (request.res.status === 404 || request.res.status === 401 || request.res.status === 403) {
       clearPreviewSession(validProjectId);
     }
     return { success: false, error: parseRunnerError(payload, request.res.status) };
   }
+
   return { success: true };
 }

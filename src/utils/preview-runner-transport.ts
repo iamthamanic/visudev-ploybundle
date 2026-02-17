@@ -10,8 +10,11 @@ function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/$/, "");
 }
 
-function shouldFallbackToDiscovery(status: number): boolean {
-  return status >= 400;
+function shouldFallbackToDiscovery(status: number, context: string): boolean {
+  if (status >= 500 || status === 408 || status === 429) return true;
+  // 404 can indicate a wrong runner base for startup endpoints.
+  if (status === 404 && context.includes("/start")) return true;
+  return false;
 }
 
 export async function requestRunnerWithDiscovery(
@@ -25,7 +28,7 @@ export async function requestRunnerWithDiscovery(
   let firstResult: RunnerFetchResult | null = null;
   try {
     firstResult = await doFetch(base);
-    if (firstResult.res.ok || !shouldFallbackToDiscovery(firstResult.res.status)) {
+    if (firstResult.res.ok || !shouldFallbackToDiscovery(firstResult.res.status, context)) {
       return { ok: true, baseUrl: base, res: firstResult.res, text: firstResult.text };
     }
   } catch (error) {

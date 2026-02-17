@@ -1,3 +1,5 @@
+import { logPreviewRunnerClientError } from "./preview-runner-log";
+
 export interface PreviewRunnerClientDeps {
   fetch: typeof fetch;
   now: () => number;
@@ -11,14 +13,16 @@ const previewRunnerClientDeps: PreviewRunnerClientDeps = {
   getLocalStorage: () => {
     try {
       return typeof localStorage === "undefined" ? null : localStorage;
-    } catch {
+    } catch (error) {
+      logPreviewRunnerClientError("localStorage unavailable", error);
       return null;
     }
   },
   getSessionStorage: () => {
     try {
       return typeof sessionStorage === "undefined" ? null : sessionStorage;
-    } catch {
+    } catch (error) {
+      logPreviewRunnerClientError("sessionStorage unavailable", error);
       return null;
     }
   },

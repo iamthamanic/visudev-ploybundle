@@ -1,4 +1,5 @@
 import { getPreviewRunnerClientDeps } from "./preview-runner-deps";
+import { logPreviewRunnerClientError } from "./preview-runner-log";
 import {
   sanitizeProjectId,
   sanitizeProjectToken,
@@ -22,7 +23,8 @@ function readStorage(storage: Storage | null, key: string): string | null {
   if (!storage) return null;
   try {
     return storage.getItem(key);
-  } catch {
+  } catch (error) {
+    logPreviewRunnerClientError(`read storage failed (${key})`, error);
     return null;
   }
 }
@@ -31,8 +33,8 @@ function writeStorage(storage: Storage | null, key: string, value: string): void
   if (!storage) return;
   try {
     storage.setItem(key, value);
-  } catch {
-    // ignore storage write failures
+  } catch (error) {
+    logPreviewRunnerClientError(`write storage failed (${key})`, error);
   }
 }
 
@@ -40,8 +42,8 @@ function removeStorage(storage: Storage | null, key: string): void {
   if (!storage) return;
   try {
     storage.removeItem(key);
-  } catch {
-    // ignore storage remove failures
+  } catch (error) {
+    logPreviewRunnerClientError(`remove storage failed (${key})`, error);
   }
 }
 

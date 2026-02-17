@@ -1,9 +1,10 @@
 import { getPreviewRunnerClientDeps } from "./preview-runner-deps";
+import { logPreviewRunnerClientError } from "./preview-runner-log";
 import { sanitizeProjectId } from "./preview-runner-validation";
 
 const RATE_LIMIT_PREFIX = "visudev_preview_rate_limit_";
 
-export type PreviewRunnerAction = "refresh" | "stop-project";
+export type PreviewRunnerAction = "start" | "stop" | "refresh" | "stop-project";
 
 function readTimestamp(storage: Storage, key: string): number | null {
   try {
@@ -11,7 +12,8 @@ function readTimestamp(storage: Storage, key: string): number | null {
     if (!raw) return null;
     const parsed = Number(raw);
     return Number.isFinite(parsed) ? parsed : null;
-  } catch {
+  } catch (error) {
+    logPreviewRunnerClientError(`read rate-limit timestamp failed (${key})`, error);
     return null;
   }
 }
@@ -19,8 +21,8 @@ function readTimestamp(storage: Storage, key: string): number | null {
 function writeTimestamp(storage: Storage, key: string, value: number): void {
   try {
     storage.setItem(key, String(value));
-  } catch {
-    // ignore storage write failures (e.g. private mode)
+  } catch (error) {
+    logPreviewRunnerClientError(`write rate-limit timestamp failed (${key})`, error);
   }
 }
 
