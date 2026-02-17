@@ -1,5 +1,5 @@
 import type { SVGProps } from "react";
-import svgPaths from "../../../imports/svg-mni0z0xtlg";
+import svgPaths from "../icons/generated-svg-paths";
 
 export function AppFlowIcon(props: SVGProps<SVGSVGElement>) {
   return (

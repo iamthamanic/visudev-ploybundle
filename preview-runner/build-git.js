@@ -3,26 +3,42 @@ import { existsSync, mkdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { warnNonFatal } from "./build-logging.js";
 
+const gitDeps = {
+  spawn,
+  existsSync,
+  mkdirSync,
+  statSync,
+  unlinkSync,
+  now: () => Date.now(),
+  env: () => process.env,
+  warn: (...args) => console.warn(...args),
+};
+
+export function configureBuildGitDeps(overrides = {}) {
+  Object.assign(gitDeps, overrides || {});
+}
+
 const GIT_LOCK_MAX_AGE_MS = 5 * 60 * 1000;
 const KNOWN_GIT_CANDIDATES = ["/usr/bin/git", "/opt/homebrew/bin/git", "/usr/local/bin/git"];
 const GIT_SUBCOMMANDS = new Set(["clone", "fetch", "checkout", "pull", "rev-parse", "rev-list"]);
 const GITHUB_EXTRAHEADER_KEY = "http.https://github.com/.extraheader";
 
 function resolveGitBinary() {
-  const explicit = process.env.SHIM_GIT_REAL_BIN;
-  if (explicit && existsSync(explicit)) return explicit;
+  const env = gitDeps.env();
+  const explicit = env.SHIM_GIT_REAL_BIN;
+  if (explicit && gitDeps.existsSync(explicit)) return explicit;
 
-  const pathEntries = String(process.env.PATH || "")
+  const pathEntries = String(env.PATH || "")
     .split(":")
     .filter(Boolean);
   for (const dir of pathEntries) {
     if (dir.includes("/.local/bin")) continue;
     const candidate = join(dir, "git");
-    if (existsSync(candidate)) return candidate;
+    if (gitDeps.existsSync(candidate)) return candidate;
   }
 
   for (const candidate of KNOWN_GIT_CANDIDATES) {
-    if (existsSync(candidate)) return candidate;
+    if (gitDeps.existsSync(candidate)) return candidate;
   }
   return "git";
 }
@@ -33,10 +49,11 @@ function getRepositoryUrl(repo) {
 
 function getGitAuthEnv() {
   const env = { GIT_TERMINAL_PROMPT: "0" };
-  const token = String(process.env.GITHUB_TOKEN || "").trim();
+  const runtimeEnv = gitDeps.env();
+  const token = String(runtimeEnv.GITHUB_TOKEN || "").trim();
   if (!token) return env;
 
-  const existingCountParsed = Number.parseInt(String(process.env.GIT_CONFIG_COUNT || "0"), 10);
+  const existingCountParsed = Number.parseInt(String(runtimeEnv.GIT_CONFIG_COUNT || "0"), 10);
   const existingCount =
     Number.isFinite(existingCountParsed) && existingCountParsed >= 0 ? existingCountParsed : 0;
 
@@ -50,7 +67,7 @@ function getGitAuthEnv() {
 
 function redactSecrets(text) {
   if (typeof text !== "string" || text.length === 0) return "";
-  const token = String(process.env.GITHUB_TOKEN || "").trim();
+  const token = String(gitDeps.env().GITHUB_TOKEN || "").trim();
   if (!token) return text;
   return text.split(token).join("[REDACTED_GITHUB_TOKEN]");
 }
@@ -64,9 +81,9 @@ function runGit(cwd, args, env = {}) {
   }
   const gitBinary = resolveGitBinary();
   return new Promise((resolve, reject) => {
-    const child = spawn(gitBinary, list, {
+    const child = gitDeps.spawn(gitBinary, list, {
       cwd,
-      env: { ...process.env, ...env },
+      env: { ...gitDeps.env(), ...env },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stderr = "";
@@ -94,13 +111,13 @@ function getGitLockPath(workspaceDir) {
 function removeStaleGitLock(workspaceDir, maxAgeMs = GIT_LOCK_MAX_AGE_MS) {
   if (!workspaceDir) return false;
   const lockPath = getGitLockPath(workspaceDir);
-  if (!existsSync(lockPath)) return false;
+  if (!gitDeps.existsSync(lockPath)) return false;
   try {
-    const stats = statSync(lockPath);
-    const ageMs = Date.now() - stats.mtimeMs;
+    const stats = gitDeps.statSync(lockPath);
+    const ageMs = gitDeps.now() - stats.mtimeMs;
     if (ageMs < maxAgeMs) return false;
-    unlinkSync(lockPath);
-    console.warn(`  [git] Removed stale index.lock (${Math.round(ageMs / 1000)}s old).`);
+    gitDeps.unlinkSync(lockPath);
+    gitDeps.warn(`  [git] Removed stale index.lock (${Math.round(ageMs / 1000)}s old).`);
     return true;
   } catch (error) {
     warnNonFatal(`removeStaleGitLock failed (${lockPath})`, error);
@@ -126,9 +143,9 @@ export async function cloneOrPull(repo, branch, workspaceDir) {
   branchSafe = branchSafe.replace(/^-+/, "") || "main";
 
   const attempt = async () => {
-    if (!existsSync(workspaceDir)) {
+    if (!gitDeps.existsSync(workspaceDir)) {
       const parent = join(workspaceDir, "..");
-      mkdirSync(parent, { recursive: true });
+      gitDeps.mkdirSync(parent, { recursive: true });
       await runGit(
         parent,
         ["clone", "--depth", "1", "-b", branchSafe, url, workspaceDir],
@@ -155,7 +172,7 @@ export async function cloneOrPull(repo, branch, workspaceDir) {
 }
 
 export async function checkoutCommit(workspaceDir, commitSha, branchForFetch) {
-  if (!workspaceDir || !existsSync(workspaceDir)) {
+  if (!workspaceDir || !gitDeps.existsSync(workspaceDir)) {
     throw new Error("Workspace fehlt für checkoutCommit");
   }
   const sha = String(commitSha || "").trim();
@@ -175,7 +192,7 @@ export async function checkoutCommit(workspaceDir, commitSha, branchForFetch) {
 }
 
 export async function hasNewCommits(workspaceDir, branch) {
-  if (!workspaceDir || !existsSync(workspaceDir)) return false;
+  if (!workspaceDir || !gitDeps.existsSync(workspaceDir)) return false;
   const branchSafe =
     (branch || "main").replace(/[^a-zA-Z0-9/_.-]/g, "").replace(/^-+/, "") || "main";
   try {

@@ -1,8 +1,26 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolveStartEnv } from "./build-env.js";
 import { warnNonFatal } from "./build-logging.js";
+
+const runtimeDeps = {
+  spawn,
+  spawnSync,
+  existsSync,
+  readFileSync,
+  resolveStartEnv,
+  platform: () => process.platform,
+  env: () => process.env,
+  log: (...args) => console.log(...args),
+  error: (...args) => console.error(...args),
+  stdoutWrite: (text) => process.stdout.write(text),
+  stderrWrite: (text) => process.stderr.write(text),
+};
+
+export function configureBuildRuntimeDeps(overrides = {}) {
+  Object.assign(runtimeDeps, overrides || {});
+}
 
 export function isSaneCommand(cmd) {
   if (typeof cmd !== "string" || !cmd.trim()) return false;
@@ -14,10 +32,10 @@ export function isSaneCommand(cmd) {
 
 function runCommand(cwd, command, env = {}) {
   return new Promise((resolve, reject) => {
-    const isWin = process.platform === "win32";
-    const child = spawn(isWin ? "cmd" : "sh", [isWin ? "/c" : "-c", command], {
+    const isWin = runtimeDeps.platform() === "win32";
+    const child = runtimeDeps.spawn(isWin ? "cmd" : "sh", [isWin ? "/c" : "-c", command], {
       cwd,
-      env: { ...process.env, ...env },
+      env: { ...runtimeDeps.env(), ...env },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stderr = "";
@@ -39,9 +57,9 @@ function runCommand(cwd, command, env = {}) {
 function runPackageManager(cwd, cmd, args, env = {}) {
   const list = Array.isArray(args) ? args.filter((a) => a != null && a !== "") : [];
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, list, {
+    const child = runtimeDeps.spawn(cmd, list, {
       cwd,
-      env: { ...process.env, ...env },
+      env: { ...runtimeDeps.env(), ...env },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stderr = "";
@@ -83,7 +101,7 @@ function runYarn(cwd, args, env = {}) {
 
 function isCommandAvailable(cmd) {
   try {
-    const result = spawnSync(cmd, ["--version"], {
+    const result = runtimeDeps.spawnSync(cmd, ["--version"], {
       stdio: "ignore",
       timeout: 1500,
       windowsHide: true,
@@ -96,8 +114,12 @@ function isCommandAvailable(cmd) {
 }
 
 export function getPackageManager(workspaceDir) {
-  if (existsSync(join(workspaceDir, "pnpm-lock.yaml")) && isCommandAvailable("pnpm")) return "pnpm";
-  if (existsSync(join(workspaceDir, "yarn.lock")) && isCommandAvailable("yarn")) return "yarn";
+  if (runtimeDeps.existsSync(join(workspaceDir, "pnpm-lock.yaml")) && isCommandAvailable("pnpm")) {
+    return "pnpm";
+  }
+  if (runtimeDeps.existsSync(join(workspaceDir, "yarn.lock")) && isCommandAvailable("yarn")) {
+    return "yarn";
+  }
   return "npm";
 }
 
@@ -114,42 +136,31 @@ function isBadScriptValue(value) {
 
 export function ensurePackageJsonScripts(workspaceDir) {
   const pkgPath = join(workspaceDir, "package.json");
-  if (!existsSync(pkgPath)) return;
+  if (!runtimeDeps.existsSync(pkgPath)) return;
   let pkg;
   try {
-    pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+    pkg = JSON.parse(runtimeDeps.readFileSync(pkgPath, "utf8"));
   } catch (error) {
     warnNonFatal(`ensurePackageJsonScripts: invalid package.json (${pkgPath})`, error);
     return;
   }
   const scripts = pkg.scripts;
   if (!scripts || typeof scripts !== "object") return;
-  let changed = false;
-  const safe = {
-    build: "echo 'No build script'",
-    postinstall: "",
-    start: "echo 'No start script'",
-    preinstall: "",
-    install: "",
-  };
   for (const [name, value] of Object.entries(scripts)) {
     if (isBadScriptValue(value)) {
-      scripts[name] = safe[name] ?? "echo ok";
-      changed = true;
+      warnNonFatal(`ensurePackageJsonScripts: unsafe script "${name}" in ${pkgPath}`);
     }
-  }
-  if (changed) {
-    writeFileSync(pkgPath, JSON.stringify(pkg, null, 2), "utf8");
   }
 }
 
 export function getBuildScript(workspaceDir) {
   const pkgPath = join(workspaceDir, "package.json");
-  if (!existsSync(pkgPath)) return null;
+  if (!runtimeDeps.existsSync(pkgPath)) return null;
   try {
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+    const pkg = JSON.parse(runtimeDeps.readFileSync(pkgPath, "utf8"));
     const script = pkg?.scripts?.build;
-    return typeof script === "string" && script.trim() ? script.trim() : null;
+    if (isBadScriptValue(script)) return null;
+    return script.trim();
   } catch (error) {
     warnNonFatal(`getBuildScript: invalid package.json (${pkgPath})`, error);
     return null;
@@ -179,7 +190,7 @@ async function installDeps(workspaceDir, pm) {
     await runYarn(workspaceDir, ["install", "--ignore-scripts"]);
     return;
   }
-  const hasLock = existsSync(join(workspaceDir, "package-lock.json"));
+  const hasLock = runtimeDeps.existsSync(join(workspaceDir, "package-lock.json"));
   if (hasLock) {
     await runNpm(workspaceDir, ["ci", "--ignore-scripts"]);
   } else {
@@ -203,8 +214,8 @@ async function runBuildStep(workspaceDir, pm, script) {
   for (const { pattern, bin, args } of NODE_BUILD_BINARIES) {
     if (pattern.test(script)) {
       const binPath = join(workspaceDir, bin);
-      if (existsSync(binPath)) {
-        console.log("  [build] node direct:", bin, args);
+      if (runtimeDeps.existsSync(binPath)) {
+        runtimeDeps.log("  [build] node direct:", bin, args);
         await runCommand(workspaceDir, `node ${bin} ${args}`);
         return;
       }
@@ -212,29 +223,29 @@ async function runBuildStep(workspaceDir, pm, script) {
     }
   }
   if (pm === "pnpm") {
-    console.log("  [build] pnpm run build");
+    runtimeDeps.log("  [build] pnpm run build");
     await runPnpm(workspaceDir, ["run", "build"]);
     return;
   }
   if (pm === "yarn") {
-    console.log("  [build] yarn run build");
+    runtimeDeps.log("  [build] yarn run build");
     await runYarn(workspaceDir, ["run", "build"]);
     return;
   }
-  console.log("  [build] npx fallback:", script);
+  runtimeDeps.log("  [build] npx fallback:", script);
   await runCommand(workspaceDir, "npx " + script);
 }
 
 export async function runBuildNodeDirect(workspaceDir) {
   const pm = getPackageManager(workspaceDir);
-  console.log("  [build] package manager:", pm);
+  runtimeDeps.log("  [build] package manager:", pm);
   await installDeps(workspaceDir, pm);
   const script = getBuildScript(workspaceDir);
   await runBuildStep(workspaceDir, pm, script);
 }
 
 export async function runBuild(workspaceDir, config) {
-  console.log("  [build] ", config.buildCommand);
+  runtimeDeps.log("  [build] ", config.buildCommand);
   await runCommand(workspaceDir, config.buildCommand);
 }
 
@@ -259,11 +270,11 @@ export function startApp(workspaceDir, port, config) {
     injectedKeys,
     placeholderMode,
     supabaseDetected,
-  } = resolveStartEnv(workspaceDir, config);
-  const env = { ...process.env, ...previewEnv, PORT: String(port) };
+  } = runtimeDeps.resolveStartEnv(workspaceDir, config);
+  const env = { ...runtimeDeps.env(), ...previewEnv, PORT: String(port) };
   const command = effectiveStartCommand(config.startCommand, port);
-  const isWin = process.platform === "win32";
-  const child = spawn(isWin ? "cmd" : "sh", [isWin ? "/c" : "-c", command], {
+  const isWin = runtimeDeps.platform() === "win32";
+  const child = runtimeDeps.spawn(isWin ? "cmd" : "sh", [isWin ? "/c" : "-c", command], {
     cwd: workspaceDir,
     env,
     stdio: ["ignore", "pipe", "pipe"],
@@ -271,8 +282,8 @@ export function startApp(workspaceDir, port, config) {
   child.__visudevInjectedEnvKeys = injectedKeys;
   child.__visudevSupabasePlaceholderMode = placeholderMode;
   child.__visudevSupabaseDetected = supabaseDetected;
-  child.stdout?.on("data", (d) => process.stdout.write(`[preview ${port}] ${d}`));
-  child.stderr?.on("data", (d) => process.stderr.write(`[preview ${port}] ${d}`));
-  child.on("error", (err) => console.error(`[preview ${port}] error:`, err));
+  child.stdout?.on("data", (d) => runtimeDeps.stdoutWrite(`[preview ${port}] ${d}`));
+  child.stderr?.on("data", (d) => runtimeDeps.stderrWrite(`[preview ${port}] ${d}`));
+  child.on("error", (err) => runtimeDeps.error(`[preview ${port}] error:`, err));
   return child;
 }
