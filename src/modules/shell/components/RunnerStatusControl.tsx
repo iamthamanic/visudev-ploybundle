@@ -65,7 +65,8 @@ export function RunnerStatusControl() {
         setCopiedCommandId(null);
         copiedResetTimerRef.current = null;
       }, 1800);
-    } catch {
+    } catch (error) {
+      console.error("RunnerStatusControl: copy command failed", error);
       setCopiedCommandId(null);
     }
   };

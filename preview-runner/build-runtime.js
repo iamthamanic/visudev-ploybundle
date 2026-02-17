@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolveStartEnv } from "./build-env.js";
+import { warnNonFatal } from "./build-logging.js";
 
 export function isSaneCommand(cmd) {
   if (typeof cmd !== "string" || !cmd.trim()) return false;
@@ -88,7 +89,8 @@ function isCommandAvailable(cmd) {
       windowsHide: true,
     });
     return result.status === 0;
-  } catch {
+  } catch (error) {
+    warnNonFatal(`isCommandAvailable failed (${cmd})`, error);
     return false;
   }
 }
@@ -116,7 +118,8 @@ export function ensurePackageJsonScripts(workspaceDir) {
   let pkg;
   try {
     pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-  } catch {
+  } catch (error) {
+    warnNonFatal(`ensurePackageJsonScripts: invalid package.json (${pkgPath})`, error);
     return;
   }
   const scripts = pkg.scripts;
@@ -147,7 +150,8 @@ export function getBuildScript(workspaceDir) {
     const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
     const script = pkg?.scripts?.build;
     return typeof script === "string" && script.trim() ? script.trim() : null;
-  } catch {
+  } catch (error) {
+    warnNonFatal(`getBuildScript: invalid package.json (${pkgPath})`, error);
     return null;
   }
 }

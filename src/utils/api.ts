@@ -57,8 +57,8 @@ async function apiRequest<T>(
     let result: { success?: boolean; error?: string; [key: string]: unknown };
     try {
       result = text ? (JSON.parse(text) as typeof result) : {};
-    } catch {
-      console.error(`API [${endpoint}]: response is not JSON`, text.slice(0, 150));
+    } catch (error) {
+      console.error(`API [${endpoint}]: response is not JSON`, error, text.slice(0, 150));
       const isPreview = endpoint.includes("preview");
       const is404 = response.status === 404;
       let errorMsg: string;
@@ -377,29 +377,6 @@ interface RunnerHealthPayload {
   activeRuns?: number;
 }
 
-interface RunnerRunsPayload {
-  success?: boolean;
-  runner?: {
-    port?: number;
-    startedAt?: string;
-    uptimeSec?: number;
-  };
-  totals?: {
-    active?: number;
-  };
-  runs?: Array<{
-    runId?: string;
-    projectId?: string;
-    repo?: string;
-    branchOrCommit?: string;
-    status?: string;
-    previewUrl?: string | null;
-    startedAt?: string | null;
-    readyAt?: string | null;
-    stoppedAt?: string | null;
-  }>;
-}
-
 export interface PreviewRunnerRunInfo {
   runId: string;
   projectId: string;
@@ -423,10 +400,172 @@ export interface PreviewRunnerRuntimeStatus {
   runs: PreviewRunnerRunInfo[];
 }
 
-async function requestRunnerJson<T>(
+type RunnerPreviewStatus = NonNullable<PreviewStatusResponse["status"]>;
+
+const RUNNER_PREVIEW_STATUS_SET = new Set<RunnerPreviewStatus>([
+  "idle",
+  "starting",
+  "ready",
+  "failed",
+  "stopped",
+]);
+const runnerWarningCache = new Set<string>();
+
+function warnRunnerOnce(context: string, error?: unknown): void {
+  const message =
+    error instanceof Error ? error.message : error != null ? String(error) : "unknown error";
+  const cacheKey = `${context}::${message}`;
+  if (runnerWarningCache.has(cacheKey)) return;
+  runnerWarningCache.add(cacheKey);
+  console.warn(`[preview-runner-api] ${context}: ${message}`);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function readNullableString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function readFiniteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function parseRunnerStatus(value: unknown): RunnerPreviewStatus | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim() as RunnerPreviewStatus;
+  return RUNNER_PREVIEW_STATUS_SET.has(normalized) ? normalized : null;
+}
+
+function parseRunnerError(payload: unknown, fallbackStatus: number): string {
+  if (isRecord(payload)) {
+    const error = readString(payload.error);
+    if (error) return error;
+  }
+  return String(fallbackStatus);
+}
+
+function parseRunnerJsonText(text: string, context: string): unknown | null {
+  if (!text.trim()) return {};
+  try {
+    return JSON.parse(text) as unknown;
+  } catch (error) {
+    warnRunnerOnce(`${context}: invalid JSON`, error);
+    return null;
+  }
+}
+
+function parseRunnerStepLogs(value: unknown): PreviewStepLog[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const logs: PreviewStepLog[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) continue;
+    const time = readString(entry.time);
+    const message = readString(entry.message);
+    if (!time || !message) continue;
+    logs.push({ time, message });
+  }
+  return logs;
+}
+
+function parseRunnerRunInfo(value: unknown): PreviewRunnerRunInfo | null {
+  if (!isRecord(value)) return null;
+  const runId = readString(value.runId);
+  if (!runId) return null;
+  return {
+    runId,
+    projectId: readString(value.projectId) ?? "",
+    repo: readString(value.repo) ?? "",
+    branchOrCommit: readString(value.branchOrCommit) ?? "",
+    status: readString(value.status) ?? "unknown",
+    previewUrl: readNullableString(value.previewUrl),
+    startedAt: readNullableString(value.startedAt),
+    readyAt: readNullableString(value.readyAt),
+    stoppedAt: readNullableString(value.stoppedAt),
+  };
+}
+
+function parseRunnerHealthPayload(value: unknown): RunnerHealthPayload | null {
+  if (!isRecord(value) || value.ok !== true) return null;
+  return {
+    ok: true,
+    service: readString(value.service) ?? undefined,
+    port: readFiniteNumber(value.port) ?? undefined,
+    startedAt: readNullableString(value.startedAt) ?? undefined,
+    uptimeSec: readFiniteNumber(value.uptimeSec) ?? undefined,
+    activeRuns: readFiniteNumber(value.activeRuns) ?? undefined,
+  };
+}
+
+function parseRunnerRuntimeSnapshot(value: unknown): {
+  runs: PreviewRunnerRunInfo[];
+  startedAt: string | null;
+  uptimeSec: number | null;
+  activeRuns: number | null;
+} {
+  if (!isRecord(value)) {
+    return { runs: [], startedAt: null, uptimeSec: null, activeRuns: null };
+  }
+
+  const runsRaw = Array.isArray(value.runs) ? value.runs : [];
+  const runs = runsRaw
+    .map(parseRunnerRunInfo)
+    .filter((entry): entry is PreviewRunnerRunInfo => entry != null);
+
+  let startedAt: string | null = null;
+  let uptimeSec: number | null = null;
+  if (isRecord(value.runner)) {
+    startedAt = readNullableString(value.runner.startedAt);
+    uptimeSec = readFiniteNumber(value.runner.uptimeSec);
+  }
+
+  let activeRuns: number | null = null;
+  if (isRecord(value.totals)) {
+    activeRuns = readFiniteNumber(value.totals.active);
+  }
+
+  return { runs, startedAt, uptimeSec, activeRuns };
+}
+
+function parseRunnerStartPayload(value: unknown): {
+  runId: string;
+  status: RunnerPreviewStatus;
+  projectToken: string | null;
+} | null {
+  if (!isRecord(value)) return null;
+  const runId = readString(value.runId);
+  if (!runId) return null;
+  const status = parseRunnerStatus(value.status) ?? "starting";
+  const projectToken = readString(value.projectToken);
+  return { runId, status, projectToken };
+}
+
+function parseRunnerStatusPayload(value: unknown): {
+  status: RunnerPreviewStatus;
+  previewUrl?: string;
+  error?: string;
+  logs?: PreviewStepLog[];
+} | null {
+  if (!isRecord(value)) return null;
+  const status = parseRunnerStatus(value.status);
+  if (!status) return null;
+  const previewUrl = readString(value.previewUrl) ?? undefined;
+  const error = readString(value.error) ?? undefined;
+  const logs = parseRunnerStepLogs(value.logs);
+  return { status, previewUrl, error, logs };
+}
+
+async function requestRunnerJson(
   baseUrl: string,
   pathname: string,
-): Promise<{ ok: boolean; status: number; data?: T }> {
+): Promise<{ ok: boolean; status: number; data?: unknown }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), RUNNER_REQUEST_TIMEOUT_MS);
   try {
@@ -434,14 +573,11 @@ async function requestRunnerJson<T>(
       method: "GET",
       signal: controller.signal,
     });
-    let data: T | undefined;
-    try {
-      data = (await response.json()) as T;
-    } catch {
-      data = undefined;
-    }
+    const text = await response.text();
+    const data = parseRunnerJsonText(text, `Runner ${pathname} response`);
     return { ok: response.ok, status: response.status, data };
-  } catch {
+  } catch (error) {
+    warnRunnerOnce(`Runner request failed (${pathname})`, error);
     return { ok: false, status: 0 };
   } finally {
     clearTimeout(timer);
@@ -450,9 +586,9 @@ async function requestRunnerJson<T>(
 
 /** Prüft, ob eine URL mit /health erreichbar ist (kurzer Timeout). */
 async function checkRunnerHealth(baseUrl: string): Promise<RunnerHealthPayload | null> {
-  const out = await requestRunnerJson<RunnerHealthPayload>(baseUrl, "/health");
-  if (!out.ok || !out.data || out.data.ok !== true) return null;
-  return out.data;
+  const out = await requestRunnerJson(baseUrl, "/health");
+  if (!out.ok || !out.data) return null;
+  return parseRunnerHealthPayload(out.data);
 }
 
 /** Sucht unter Kandidaten-Ports (4000, 4100, …) nach einem laufenden Runner; setzt discoveredRunnerUrl. */
@@ -492,27 +628,15 @@ export async function getPreviewRunnerRuntimeStatus(): Promise<PreviewRunnerRunt
     };
   }
 
-  const runsResp = await requestRunnerJson<RunnerRunsPayload>(activeBase, "/runs");
-  const runsRaw =
-    runsResp.ok && runsResp.data && Array.isArray(runsResp.data.runs) ? runsResp.data.runs : [];
-  const runs: PreviewRunnerRunInfo[] = runsRaw
-    .filter((entry): entry is NonNullable<typeof entry> => entry != null)
-    .map((entry) => ({
-      runId: String(entry.runId ?? ""),
-      projectId: String(entry.projectId ?? ""),
-      repo: String(entry.repo ?? ""),
-      branchOrCommit: String(entry.branchOrCommit ?? ""),
-      status: String(entry.status ?? "unknown"),
-      previewUrl: entry.previewUrl ?? null,
-      startedAt: entry.startedAt ?? null,
-      readyAt: entry.readyAt ?? null,
-      stoppedAt: entry.stoppedAt ?? null,
-    }))
-    .filter((entry) => entry.runId.length > 0);
+  const runsResp = await requestRunnerJson(activeBase, "/runs");
+  const runtime = runsResp.ok
+    ? parseRunnerRuntimeSnapshot(runsResp.data)
+    : parseRunnerRuntimeSnapshot(null);
+  const runs = runtime.runs;
   const projects = Array.from(
     new Set(runs.map((entry) => entry.projectId).filter((projectId) => projectId.length > 0)),
   );
-  const activeRunsFromRuns = runsResp.data?.totals?.active;
+  const activeRunsFromRuns = runtime.activeRuns;
   const activeRuns =
     typeof activeRunsFromRuns === "number" && Number.isFinite(activeRunsFromRuns)
       ? activeRunsFromRuns
@@ -524,9 +648,9 @@ export async function getPreviewRunnerRuntimeStatus(): Promise<PreviewRunnerRunt
     state: "active",
     baseUrl: activeBase,
     checkedAt,
-    startedAt: runsResp.data?.runner?.startedAt ?? health.startedAt ?? null,
+    startedAt: runtime.startedAt ?? health.startedAt ?? null,
     uptimeSec:
-      runsResp.data?.runner?.uptimeSec ??
+      runtime.uptimeSec ??
       (typeof health.uptimeSec === "number" && Number.isFinite(health.uptimeSec)
         ? health.uptimeSec
         : null),
@@ -561,6 +685,7 @@ function localRunnerGuard(): { ok: boolean; error?: string } {
 
 /** projectId -> runId when using local runner */
 const localRunIds = new Map<string, string>();
+const localProjectTokens = new Map<string, string>();
 
 const PREVIEW_RUNID_KEY = "visudev_preview_runId_";
 const PREVIEW_PROJECT_TOKEN_KEY = "visudev_preview_project_token_";
@@ -589,19 +714,27 @@ function clearStoredRunId(projectId: string): void {
 }
 
 function getStoredProjectToken(projectId: string): string | null {
-  if (typeof localStorage === "undefined") return null;
-  const token = localStorage.getItem(PREVIEW_PROJECT_TOKEN_KEY + projectId);
-  return token && token.trim() !== "" ? token : null;
+  const cached = localProjectTokens.get(projectId);
+  if (cached) return cached;
+  if (typeof sessionStorage === "undefined") return null;
+  const token = sessionStorage.getItem(PREVIEW_PROJECT_TOKEN_KEY + projectId);
+  if (!token || token.trim() === "") return null;
+  localProjectTokens.set(projectId, token);
+  return token;
 }
 
 function setStoredProjectToken(projectId: string, token: string): void {
-  if (typeof localStorage === "undefined") return;
-  localStorage.setItem(PREVIEW_PROJECT_TOKEN_KEY + projectId, token);
+  localProjectTokens.set(projectId, token);
+  if (typeof sessionStorage !== "undefined") {
+    sessionStorage.setItem(PREVIEW_PROJECT_TOKEN_KEY + projectId, token);
+  }
 }
 
 function clearStoredProjectToken(projectId: string): void {
-  if (typeof localStorage === "undefined") return;
-  localStorage.removeItem(PREVIEW_PROJECT_TOKEN_KEY + projectId);
+  localProjectTokens.delete(projectId);
+  if (typeof sessionStorage !== "undefined") {
+    sessionStorage.removeItem(PREVIEW_PROJECT_TOKEN_KEY + projectId);
+  }
 }
 
 function runnerHeaders(projectId: string, withJson = false): HeadersInit {
@@ -648,7 +781,8 @@ async function localPreviewStart(
     const out = await doFetch(base);
     res = out.res;
     text = out.text;
-  } catch {
+  } catch (error) {
+    warnRunnerOnce(`Runner /start request failed (${base})`, error);
     const found = await discoverRunnerUrl();
     if (found) {
       base = found.replace(/\/$/, "");
@@ -656,7 +790,8 @@ async function localPreviewStart(
         const out = await doFetch(base);
         res = out.res;
         text = out.text;
-      } catch {
+      } catch (retryError) {
+        warnRunnerOnce(`Runner /start retry failed (${base})`, retryError);
         return {
           success: false,
           error: `Preview Runner nicht erreichbar. Läuft der Runner? (lokal: ${base})`,
@@ -669,24 +804,27 @@ async function localPreviewStart(
       };
     }
   }
-  let data: {
-    success?: boolean;
-    runId?: string;
-    status?: string;
-    projectToken?: string;
-    error?: string;
-  };
-  try {
-    data = text ? (JSON.parse(text) as typeof data) : {};
-  } catch {
+
+  const payload = parseRunnerJsonText(text, "Runner /start response");
+  if (payload == null) {
     return { success: false, error: "Runner response not JSON" };
   }
-  if (!res.ok) return { success: false, error: (data.error as string) || String(res.status) };
-  if (data.runId) setStoredRunId(projectId, data.runId);
-  if (typeof data.projectToken === "string" && data.projectToken.trim() !== "") {
-    setStoredProjectToken(projectId, data.projectToken);
+
+  if (!res.ok) {
+    return { success: false, error: parseRunnerError(payload, res.status) };
   }
-  return { success: true, data: { runId: data.runId!, status: data.status ?? "starting" } };
+
+  const parsed = parseRunnerStartPayload(payload);
+  if (!parsed) {
+    warnRunnerOnce("Runner /start response missing required fields");
+    return { success: false, error: "Runner response missing required start fields." };
+  }
+
+  setStoredRunId(projectId, parsed.runId);
+  if (parsed.projectToken) {
+    setStoredProjectToken(projectId, parsed.projectToken);
+  }
+  return { success: true, data: { runId: parsed.runId, status: parsed.status } };
 }
 
 async function localPreviewStatus(projectId: string): Promise<{
@@ -706,7 +844,8 @@ async function localPreviewStatus(projectId: string): Promise<{
       headers: runnerHeaders(projectId),
     });
     text = await res.text();
-  } catch {
+  } catch (error) {
+    warnRunnerOnce(`Runner /status request failed (${base})`, error);
     const found = await discoverRunnerUrl();
     if (found) {
       base = found.replace(/\/$/, "");
@@ -715,7 +854,8 @@ async function localPreviewStatus(projectId: string): Promise<{
           headers: runnerHeaders(projectId),
         });
         text = await res.text();
-      } catch {
+      } catch (retryError) {
+        warnRunnerOnce(`Runner /status retry failed (${base})`, retryError);
         return {
           success: false,
           error: `Preview Runner nicht erreichbar. Läuft der Runner? (lokal: ${base})`,
@@ -728,33 +868,38 @@ async function localPreviewStatus(projectId: string): Promise<{
       };
     }
   }
-  let data: {
-    success?: boolean;
-    status?: string;
-    previewUrl?: string;
-    error?: string;
-    logs?: PreviewStepLog[];
-  };
-  try {
-    data = text ? (JSON.parse(text) as typeof data) : {};
-  } catch {
+
+  const payload = parseRunnerJsonText(text, "Runner /status response");
+  if (payload == null) {
     return { success: false, error: "Runner response not JSON" };
   }
+
   if (!res.ok) {
-    if (res.status === 404) {
+    if (res.status === 404 || res.status === 401 || res.status === 403) {
       clearStoredRunId(projectId);
+      clearStoredProjectToken(projectId);
       return { success: true, status: "idle" };
     }
-    return { success: false, error: (data.error as string) || String(res.status) };
+    return { success: false, error: parseRunnerError(payload, res.status) };
   }
-  const status = (data.status as PreviewStatusResponse["status"]) ?? "idle";
-  if (status === "idle") clearStoredRunId(projectId);
+
+  const parsed = parseRunnerStatusPayload(payload);
+  if (!parsed) {
+    warnRunnerOnce("Runner /status response missing required fields");
+    return { success: false, error: "Runner response missing required status fields." };
+  }
+
+  if (parsed.status === "idle") {
+    clearStoredRunId(projectId);
+    clearStoredProjectToken(projectId);
+  }
+
   return {
     success: true,
-    status,
-    previewUrl: data.previewUrl,
-    error: data.error,
-    logs: Array.isArray(data.logs) ? data.logs : undefined,
+    status: parsed.status,
+    previewUrl: parsed.previewUrl,
+    error: parsed.error,
+    logs: parsed.logs,
   };
 }
 
@@ -762,27 +907,33 @@ async function localPreviewStop(projectId: string): Promise<{ success: boolean; 
   const runId = getStoredRunId(projectId);
   if (!runId) return { success: true };
   const base = getEffectiveRunnerUrl().replace(/\/$/, "");
-  const res = await fetch(`${base}/stop/${encodeURIComponent(runId)}`, {
-    method: "POST",
-    headers: runnerHeaders(projectId),
-  });
-  const text = await res.text();
-  let data: { success?: boolean; error?: string };
   try {
-    data = text ? (JSON.parse(text) as typeof data) : {};
-  } catch {
-    return { success: false, error: "Runner response not JSON" };
-  }
-  if (!res.ok) {
-    if (res.status === 404) {
-      clearStoredRunId(projectId);
-      clearStoredProjectToken(projectId);
+    const res = await fetch(`${base}/stop/${encodeURIComponent(runId)}`, {
+      method: "POST",
+      headers: runnerHeaders(projectId),
+    });
+    const text = await res.text();
+    const payload = parseRunnerJsonText(text, "Runner /stop response");
+    if (payload == null) {
+      return { success: false, error: "Runner response not JSON" };
     }
-    return { success: false, error: (data.error as string) || String(res.status) };
+
+    if (!res.ok) {
+      if (res.status === 404) {
+        clearStoredRunId(projectId);
+        clearStoredProjectToken(projectId);
+        return { success: true };
+      }
+      return { success: false, error: parseRunnerError(payload, res.status) };
+    }
+
+    clearStoredRunId(projectId);
+    clearStoredProjectToken(projectId);
+    return { success: true };
+  } catch (error) {
+    warnRunnerOnce(`Runner /stop request failed (${base})`, error);
+    return { success: false, error: "Runner request failed" };
   }
-  clearStoredRunId(projectId);
-  clearStoredProjectToken(projectId);
-  return { success: true };
 }
 
 async function localPreviewStopProject(
@@ -796,10 +947,8 @@ async function localPreviewStopProject(
       headers: runnerHeaders(projectId),
     });
     const text = await res.text();
-    let data: { success?: boolean; error?: string };
-    try {
-      data = text ? (JSON.parse(text) as typeof data) : {};
-    } catch {
+    const payload = parseRunnerJsonText(text, "Runner /stop-project response");
+    if (payload == null) {
       return { success: false, error: "Runner response not JSON" };
     }
     if (res.status === 404) {
@@ -809,12 +958,13 @@ async function localPreviewStopProject(
       return { success: true };
     }
     if (!res.ok) {
-      return { success: false, error: (data.error as string) || String(res.status) };
+      return { success: false, error: parseRunnerError(payload, res.status) };
     }
     clearStoredRunId(projectId);
     clearStoredProjectToken(projectId);
     return { success: true };
   } catch (error) {
+    warnRunnerOnce(`Runner /stop-project request failed (${base})`, error);
     if (runId) return localPreviewStop(projectId);
     clearStoredRunId(projectId);
     clearStoredProjectToken(projectId);
@@ -837,27 +987,33 @@ async function localPreviewRefresh(
       error: "Kein aktiver Preview für dieses Projekt (Seite neu laden und Preview neu starten).",
     };
   const base = getEffectiveRunnerUrl().replace(/\/$/, "");
-  const res = await fetch(`${base}/refresh`, {
-    method: "POST",
-    headers: runnerHeaders(projectId, true),
-    body: JSON.stringify({
-      runId,
-      bootMode: options?.bootMode ?? undefined,
-      injectSupabasePlaceholders: options?.injectSupabasePlaceholders ?? undefined,
-    }),
-  });
-  const text = await res.text();
-  let data: { success?: boolean; error?: string };
   try {
-    data = text ? (JSON.parse(text) as typeof data) : {};
-  } catch {
-    return { success: false, error: "Runner response not JSON" };
+    const res = await fetch(`${base}/refresh`, {
+      method: "POST",
+      headers: runnerHeaders(projectId, true),
+      body: JSON.stringify({
+        runId,
+        bootMode: options?.bootMode ?? undefined,
+        injectSupabasePlaceholders: options?.injectSupabasePlaceholders ?? undefined,
+      }),
+    });
+    const text = await res.text();
+    const payload = parseRunnerJsonText(text, "Runner /refresh response");
+    if (payload == null) {
+      return { success: false, error: "Runner response not JSON" };
+    }
+    if (!res.ok) {
+      if (res.status === 404 || res.status === 401 || res.status === 403) {
+        clearStoredRunId(projectId);
+        clearStoredProjectToken(projectId);
+      }
+      return { success: false, error: parseRunnerError(payload, res.status) };
+    }
+    return { success: true };
+  } catch (error) {
+    warnRunnerOnce(`Runner /refresh request failed (${base})`, error);
+    return { success: false, error: "Runner request failed" };
   }
-  if (!res.ok) {
-    if (res.status === 404) clearStoredRunId(projectId);
-    return { success: false, error: (data.error as string) || String(res.status) };
-  }
-  return { success: true };
 }
 
 /** Single log line from preview start/refresh (Runner or Edge). */

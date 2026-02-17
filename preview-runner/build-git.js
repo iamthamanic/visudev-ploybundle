@@ -6,6 +6,7 @@ import { warnNonFatal } from "./build-logging.js";
 const GIT_LOCK_MAX_AGE_MS = 5 * 60 * 1000;
 const KNOWN_GIT_CANDIDATES = ["/usr/bin/git", "/opt/homebrew/bin/git", "/usr/local/bin/git"];
 const GIT_SUBCOMMANDS = new Set(["clone", "fetch", "checkout", "pull", "rev-parse", "rev-list"]);
+const GITHUB_EXTRAHEADER_KEY = "http.https://github.com/.extraheader";
 
 function resolveGitBinary() {
   const explicit = process.env.SHIM_GIT_REAL_BIN;
@@ -26,13 +27,32 @@ function resolveGitBinary() {
   return "git";
 }
 
-function getCloneUrl(repo) {
-  const token = process.env.GITHUB_TOKEN;
-  const base = `https://github.com/${repo}.git`;
-  if (token && token.trim()) {
-    return base.replace("https://", `https://x-access-token:${token.trim()}@`);
-  }
-  return base;
+function getRepositoryUrl(repo) {
+  return `https://github.com/${repo}.git`;
+}
+
+function getGitAuthEnv() {
+  const env = { GIT_TERMINAL_PROMPT: "0" };
+  const token = String(process.env.GITHUB_TOKEN || "").trim();
+  if (!token) return env;
+
+  const existingCountParsed = Number.parseInt(String(process.env.GIT_CONFIG_COUNT || "0"), 10);
+  const existingCount =
+    Number.isFinite(existingCountParsed) && existingCountParsed >= 0 ? existingCountParsed : 0;
+
+  return {
+    ...env,
+    GIT_CONFIG_COUNT: String(existingCount + 1),
+    [`GIT_CONFIG_KEY_${existingCount}`]: GITHUB_EXTRAHEADER_KEY,
+    [`GIT_CONFIG_VALUE_${existingCount}`]: `AUTHORIZATION: bearer ${token}`,
+  };
+}
+
+function redactSecrets(text) {
+  if (typeof text !== "string" || text.length === 0) return "";
+  const token = String(process.env.GITHUB_TOKEN || "").trim();
+  if (!token) return text;
+  return text.split(token).join("[REDACTED_GITHUB_TOKEN]");
 }
 
 function runGit(cwd, args, env = {}) {
@@ -58,8 +78,10 @@ function runGit(cwd, args, env = {}) {
       stderr += d.toString();
     });
     child.on("close", (code) => {
-      if (code === 0) resolve({ stdout, stderr });
-      else reject(new Error(stderr || stdout || `git exit ${code}`));
+      const stdoutSafe = redactSecrets(stdout);
+      const stderrSafe = redactSecrets(stderr);
+      if (code === 0) resolve({ stdout: stdoutSafe, stderr: stderrSafe });
+      else reject(new Error(stderrSafe || stdoutSafe || `git exit ${code}`));
     });
     child.on("error", reject);
   });
@@ -98,7 +120,8 @@ export async function cloneOrPull(repo, branch, workspaceDir) {
   if (!workspaceDir || typeof workspaceDir !== "string") {
     throw new Error("Workspace-Pfad fehlt oder ist ungültig");
   }
-  const url = getCloneUrl(repo);
+  const url = getRepositoryUrl(repo);
+  const gitAuthEnv = getGitAuthEnv();
   let branchSafe = (branch || "main").replace(/[^a-zA-Z0-9/_.-]/g, "") || "main";
   branchSafe = branchSafe.replace(/^-+/, "") || "main";
 
@@ -106,13 +129,17 @@ export async function cloneOrPull(repo, branch, workspaceDir) {
     if (!existsSync(workspaceDir)) {
       const parent = join(workspaceDir, "..");
       mkdirSync(parent, { recursive: true });
-      await runGit(parent, ["clone", "--depth", "1", "-b", branchSafe, url, workspaceDir]);
+      await runGit(
+        parent,
+        ["clone", "--depth", "1", "-b", branchSafe, url, workspaceDir],
+        gitAuthEnv,
+      );
       return "cloned";
     }
 
-    await runGit(workspaceDir, ["fetch", "origin", branchSafe]);
+    await runGit(workspaceDir, ["fetch", "origin", branchSafe], gitAuthEnv);
     await runGit(workspaceDir, ["checkout", branchSafe]);
-    await runGit(workspaceDir, ["pull", "origin", branchSafe, "--rebase"]);
+    await runGit(workspaceDir, ["pull", "origin", branchSafe, "--rebase"], gitAuthEnv);
     return "pulled";
   };
 
@@ -136,12 +163,13 @@ export async function checkoutCommit(workspaceDir, commitSha, branchForFetch) {
     throw new Error("commitSha muss ein 40-stelliger Hex-Hash sein");
   }
   const branchSafe = (branchForFetch || "main").replace(/[^a-zA-Z0-9/_.-]/g, "") || "main";
+  const gitAuthEnv = getGitAuthEnv();
   removeStaleGitLock(workspaceDir);
   try {
-    await runGit(workspaceDir, ["fetch", "origin", branchSafe, "--unshallow"]);
+    await runGit(workspaceDir, ["fetch", "origin", branchSafe, "--unshallow"], gitAuthEnv);
   } catch (error) {
     warnNonFatal(`checkoutCommit: --unshallow fallback for ${workspaceDir}`, error);
-    await runGit(workspaceDir, ["fetch", "origin", branchSafe]);
+    await runGit(workspaceDir, ["fetch", "origin", branchSafe], gitAuthEnv);
   }
   await runGit(workspaceDir, ["checkout", sha]);
 }
@@ -151,13 +179,14 @@ export async function hasNewCommits(workspaceDir, branch) {
   const branchSafe =
     (branch || "main").replace(/[^a-zA-Z0-9/_.-]/g, "").replace(/^-+/, "") || "main";
   try {
+    const gitAuthEnv = getGitAuthEnv();
     removeStaleGitLock(workspaceDir);
-    await runGit(workspaceDir, ["fetch", "origin", branchSafe]);
-    const { stdout } = await runGit(workspaceDir, [
-      "rev-list",
-      "--count",
-      `HEAD..origin/${branchSafe}`,
-    ]);
+    await runGit(workspaceDir, ["fetch", "origin", branchSafe], gitAuthEnv);
+    const { stdout } = await runGit(
+      workspaceDir,
+      ["rev-list", "--count", `HEAD..origin/${branchSafe}`],
+      gitAuthEnv,
+    );
     return parseInt(stdout.trim(), 10) > 0;
   } catch (error) {
     warnNonFatal(`hasNewCommits failed (${workspaceDir})`, error);
