@@ -52,6 +52,11 @@ export function clearStoredProjectToken(projectId: string): void {
   }
 }
 
+export function clearPreviewSession(projectId: string): void {
+  clearStoredRunId(projectId);
+  clearStoredProjectToken(projectId);
+}
+
 export function runnerHeaders(projectId: string, withJson = false): HeadersInit {
   const headers: Record<string, string> = {};
   if (withJson) headers["Content-Type"] = "application/json";

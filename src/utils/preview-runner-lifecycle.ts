@@ -1,5 +1,4 @@
 import type { PreviewRuntimeOptions } from "../lib/visudev/types";
-import { discoverRunnerUrl } from "./preview-runner-core";
 import { getEffectiveRunnerUrl } from "./preview-runner-mode";
 import {
   parseRunnerError,
@@ -9,13 +8,13 @@ import {
   warnRunnerOnce,
 } from "./preview-runner-parser";
 import {
-  clearStoredProjectToken,
-  clearStoredRunId,
+  clearPreviewSession,
   getStoredRunId,
   runnerHeaders,
   setStoredProjectToken,
   setStoredRunId,
 } from "./preview-runner-session";
+import { requestRunnerWithDiscovery } from "./preview-runner-transport";
 import type { PreviewStepLog } from "./preview-runner-types";
 
 export async function localPreviewStart(
@@ -28,7 +27,7 @@ export async function localPreviewStart(
     injectSupabasePlaceholders?: PreviewRuntimeOptions["injectSupabasePlaceholders"];
   },
 ): Promise<{ success: boolean; data?: { runId: string; status: string }; error?: string }> {
-  let base = getEffectiveRunnerUrl().replace(/\/$/, "");
+  const base = getEffectiveRunnerUrl().replace(/\/$/, "");
   const body = JSON.stringify({
     projectId,
     repo: options?.repo,
@@ -48,43 +47,18 @@ export async function localPreviewStart(
     return { res, text };
   };
 
-  let res: Response;
-  let text = "";
-  try {
-    const out = await doFetch(base);
-    res = out.res;
-    text = out.text;
-  } catch (error) {
-    warnRunnerOnce(`Runner /start request failed (${base})`, error);
-    const found = await discoverRunnerUrl();
-    if (found) {
-      base = found.replace(/\/$/, "");
-      try {
-        const out = await doFetch(base);
-        res = out.res;
-        text = out.text;
-      } catch (retryError) {
-        warnRunnerOnce(`Runner /start retry failed (${base})`, retryError);
-        return {
-          success: false,
-          error: `Preview Runner nicht erreichbar. Läuft der Runner? (lokal: ${base})`,
-        };
-      }
-    } else {
-      return {
-        success: false,
-        error: `Preview Runner nicht erreichbar. Läuft der Runner? (lokal: http://localhost:4000)`,
-      };
-    }
+  const request = await requestRunnerWithDiscovery(base, "Runner /start", doFetch);
+  if (!request.ok) {
+    return { success: false, error: request.error };
   }
 
-  const payload = parseRunnerJsonText(text, "Runner /start response");
+  const payload = parseRunnerJsonText(request.text, "Runner /start response");
   if (payload == null) {
     return { success: false, error: "Runner response not JSON" };
   }
 
-  if (!res.ok) {
-    return { success: false, error: parseRunnerError(payload, res.status) };
+  if (!request.res.ok) {
+    return { success: false, error: parseRunnerError(payload, request.res.status) };
   }
 
   const parsed = parseRunnerStartPayload(payload);
@@ -109,51 +83,31 @@ export async function localPreviewStatus(projectId: string): Promise<{
 }> {
   const runId = getStoredRunId(projectId);
   if (!runId) return { success: true, status: "idle" };
-  let base = getEffectiveRunnerUrl().replace(/\/$/, "");
-  let res: Response;
-  let text: string;
-  try {
-    res = await fetch(`${base}/status/${encodeURIComponent(runId)}`, {
+  const base = getEffectiveRunnerUrl().replace(/\/$/, "");
+  const doFetch = async (urlBase: string): Promise<{ res: Response; text: string }> => {
+    const res = await fetch(`${urlBase}/status/${encodeURIComponent(runId)}`, {
       headers: runnerHeaders(projectId),
     });
-    text = await res.text();
-  } catch (error) {
-    warnRunnerOnce(`Runner /status request failed (${base})`, error);
-    const found = await discoverRunnerUrl();
-    if (found) {
-      base = found.replace(/\/$/, "");
-      try {
-        res = await fetch(`${base}/status/${encodeURIComponent(runId)}`, {
-          headers: runnerHeaders(projectId),
-        });
-        text = await res.text();
-      } catch (retryError) {
-        warnRunnerOnce(`Runner /status retry failed (${base})`, retryError);
-        return {
-          success: false,
-          error: `Preview Runner nicht erreichbar. Läuft der Runner? (lokal: ${base})`,
-        };
-      }
-    } else {
-      return {
-        success: false,
-        error: "Preview Runner nicht erreichbar. Läuft der Runner? (lokal: http://localhost:4000)",
-      };
-    }
+    const text = await res.text();
+    return { res, text };
+  };
+
+  const request = await requestRunnerWithDiscovery(base, "Runner /status", doFetch);
+  if (!request.ok) {
+    return { success: false, error: request.error };
   }
 
-  const payload = parseRunnerJsonText(text, "Runner /status response");
+  const payload = parseRunnerJsonText(request.text, "Runner /status response");
   if (payload == null) {
     return { success: false, error: "Runner response not JSON" };
   }
 
-  if (!res.ok) {
-    if (res.status === 404 || res.status === 401 || res.status === 403) {
-      clearStoredRunId(projectId);
-      clearStoredProjectToken(projectId);
+  if (!request.res.ok) {
+    if (request.res.status === 404 || request.res.status === 401 || request.res.status === 403) {
+      clearPreviewSession(projectId);
       return { success: true, status: "idle" };
     }
-    return { success: false, error: parseRunnerError(payload, res.status) };
+    return { success: false, error: parseRunnerError(payload, request.res.status) };
   }
 
   const parsed = parseRunnerStatusPayload(payload);
@@ -163,8 +117,7 @@ export async function localPreviewStatus(projectId: string): Promise<{
   }
 
   if (parsed.status === "idle") {
-    clearStoredRunId(projectId);
-    clearStoredProjectToken(projectId);
+    clearPreviewSession(projectId);
   }
 
   return {
@@ -181,7 +134,7 @@ export async function localPreviewStop(
 ): Promise<{ success: boolean; error?: string }> {
   const runId = getStoredRunId(projectId);
   if (!runId) return { success: true };
-  let base = getEffectiveRunnerUrl().replace(/\/$/, "");
+  const base = getEffectiveRunnerUrl().replace(/\/$/, "");
   const doFetch = async (urlBase: string): Promise<{ res: Response; text: string }> => {
     const res = await fetch(`${urlBase}/stop/${encodeURIComponent(runId)}`, {
       method: "POST",
@@ -191,52 +144,28 @@ export async function localPreviewStop(
     return { res, text };
   };
 
-  let res: Response;
-  let text: string;
-  try {
-    const first = await doFetch(base);
-    res = first.res;
-    text = first.text;
-  } catch (error) {
-    warnRunnerOnce(`Runner /stop request failed (${base})`, error);
-    const found = await discoverRunnerUrl();
-    if (found) {
-      base = found.replace(/\/$/, "");
-      try {
-        const retry = await doFetch(base);
-        res = retry.res;
-        text = retry.text;
-      } catch (retryError) {
-        warnRunnerOnce(`Runner /stop retry failed (${base})`, retryError);
-        return {
-          success: false,
-          error: `Preview Runner nicht erreichbar. Läuft der Runner? (lokal: ${base})`,
-        };
-      }
-    } else {
-      return {
-        success: false,
-        error: "Preview Runner nicht erreichbar. Läuft der Runner? (lokal: http://localhost:4000)",
-      };
-    }
+  const request = await requestRunnerWithDiscovery(base, "Runner /stop", doFetch);
+  if (!request.ok) {
+    return { success: false, error: request.error };
   }
 
-  const payload = parseRunnerJsonText(text, "Runner /stop response");
+  const payload = parseRunnerJsonText(request.text, "Runner /stop response");
   if (payload == null) {
     return { success: false, error: "Runner response not JSON" };
   }
 
-  if (!res.ok) {
-    if (res.status === 404) {
-      clearStoredRunId(projectId);
-      clearStoredProjectToken(projectId);
-      return { success: true };
+  if (!request.res.ok) {
+    if (request.res.status === 404 || request.res.status === 401 || request.res.status === 403) {
+      clearPreviewSession(projectId);
+      if (request.res.status === 404) {
+        return { success: true };
+      }
+      return { success: false, error: parseRunnerError(payload, request.res.status) };
     }
-    return { success: false, error: parseRunnerError(payload, res.status) };
+    return { success: false, error: parseRunnerError(payload, request.res.status) };
   }
 
-  clearStoredRunId(projectId);
-  clearStoredProjectToken(projectId);
+  clearPreviewSession(projectId);
   return { success: true };
 }
 
@@ -244,7 +173,7 @@ export async function localPreviewStopProject(
   projectId: string,
 ): Promise<{ success: boolean; error?: string }> {
   const runId = getStoredRunId(projectId);
-  let base = getEffectiveRunnerUrl().replace(/\/$/, "");
+  const base = getEffectiveRunnerUrl().replace(/\/$/, "");
   const doFetch = async (urlBase: string): Promise<{ res: Response; text: string }> => {
     const res = await fetch(`${urlBase}/stop-project/${encodeURIComponent(projectId)}`, {
       method: "POST",
@@ -254,53 +183,28 @@ export async function localPreviewStopProject(
     return { res, text };
   };
 
-  let res: Response;
-  let text: string;
-  try {
-    const first = await doFetch(base);
-    res = first.res;
-    text = first.text;
-  } catch (error) {
-    warnRunnerOnce(`Runner /stop-project request failed (${base})`, error);
-    const found = await discoverRunnerUrl();
-    if (found) {
-      base = found.replace(/\/$/, "");
-      try {
-        const retry = await doFetch(base);
-        res = retry.res;
-        text = retry.text;
-      } catch (retryError) {
-        warnRunnerOnce(`Runner /stop-project retry failed (${base})`, retryError);
-        if (runId) return localPreviewStop(projectId);
-        return {
-          success: false,
-          error: `Preview Runner nicht erreichbar. Läuft der Runner? (lokal: ${base})`,
-        };
-      }
-    } else {
-      if (runId) return localPreviewStop(projectId);
-      return {
-        success: false,
-        error: "Preview Runner nicht erreichbar. Läuft der Runner? (lokal: http://localhost:4000)",
-      };
-    }
+  const request = await requestRunnerWithDiscovery(base, "Runner /stop-project", doFetch);
+  if (!request.ok) {
+    if (runId) return localPreviewStop(projectId);
+    return { success: false, error: request.error };
   }
 
-  const payload = parseRunnerJsonText(text, "Runner /stop-project response");
+  const payload = parseRunnerJsonText(request.text, "Runner /stop-project response");
   if (payload == null) {
     return { success: false, error: "Runner response not JSON" };
   }
-  if (res.status === 404) {
+  if (request.res.status === 404 || request.res.status === 401 || request.res.status === 403) {
     if (runId) return localPreviewStop(projectId);
-    clearStoredRunId(projectId);
-    clearStoredProjectToken(projectId);
-    return { success: true };
+    clearPreviewSession(projectId);
+    if (request.res.status === 404) {
+      return { success: true };
+    }
+    return { success: false, error: parseRunnerError(payload, request.res.status) };
   }
-  if (!res.ok) {
-    return { success: false, error: parseRunnerError(payload, res.status) };
+  if (!request.res.ok) {
+    return { success: false, error: parseRunnerError(payload, request.res.status) };
   }
-  clearStoredRunId(projectId);
-  clearStoredProjectToken(projectId);
+  clearPreviewSession(projectId);
   return { success: true };
 }
 
@@ -315,7 +219,7 @@ export async function localPreviewRefresh(
       success: false,
       error: "Kein aktiver Preview für dieses Projekt (Seite neu laden und Preview neu starten).",
     };
-  let base = getEffectiveRunnerUrl().replace(/\/$/, "");
+  const base = getEffectiveRunnerUrl().replace(/\/$/, "");
   const doFetch = async (urlBase: string): Promise<{ res: Response; text: string }> => {
     const res = await fetch(`${urlBase}/refresh`, {
       method: "POST",
@@ -330,46 +234,20 @@ export async function localPreviewRefresh(
     return { res, text };
   };
 
-  let res: Response;
-  let text: string;
-  try {
-    const first = await doFetch(base);
-    res = first.res;
-    text = first.text;
-  } catch (error) {
-    warnRunnerOnce(`Runner /refresh request failed (${base})`, error);
-    const found = await discoverRunnerUrl();
-    if (found) {
-      base = found.replace(/\/$/, "");
-      try {
-        const retry = await doFetch(base);
-        res = retry.res;
-        text = retry.text;
-      } catch (retryError) {
-        warnRunnerOnce(`Runner /refresh retry failed (${base})`, retryError);
-        return {
-          success: false,
-          error: `Preview Runner nicht erreichbar. Läuft der Runner? (lokal: ${base})`,
-        };
-      }
-    } else {
-      return {
-        success: false,
-        error: "Preview Runner nicht erreichbar. Läuft der Runner? (lokal: http://localhost:4000)",
-      };
-    }
+  const request = await requestRunnerWithDiscovery(base, "Runner /refresh", doFetch);
+  if (!request.ok) {
+    return { success: false, error: request.error };
   }
 
-  const payload = parseRunnerJsonText(text, "Runner /refresh response");
+  const payload = parseRunnerJsonText(request.text, "Runner /refresh response");
   if (payload == null) {
     return { success: false, error: "Runner response not JSON" };
   }
-  if (!res.ok) {
-    if (res.status === 404 || res.status === 401 || res.status === 403) {
-      clearStoredRunId(projectId);
-      clearStoredProjectToken(projectId);
+  if (!request.res.ok) {
+    if (request.res.status === 404 || request.res.status === 401 || request.res.status === 403) {
+      clearPreviewSession(projectId);
     }
-    return { success: false, error: parseRunnerError(payload, res.status) };
+    return { success: false, error: parseRunnerError(payload, request.res.status) };
   }
   return { success: true };
 }

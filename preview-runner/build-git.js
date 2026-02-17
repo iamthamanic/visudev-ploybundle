@@ -47,6 +47,38 @@ function getRepositoryUrl(repo) {
   return `https://github.com/${repo}.git`;
 }
 
+function normalizeRepoSlug(repoValue) {
+  const trimmed = String(repoValue || "").trim();
+  const withoutProtocol = trimmed.replace(/^https?:\/\/github\.com\//i, "");
+  const withoutSuffix = withoutProtocol.replace(/\.git$/i, "");
+  const clean = withoutSuffix.replace(/^\/+|\/+$/g, "");
+  const parts = clean.split("/").filter(Boolean);
+  if (parts.length !== 2) return null;
+  const [owner, name] = parts;
+  if (!/^[A-Za-z0-9_.-]{1,100}$/.test(owner) || !/^[A-Za-z0-9_.-]{1,100}$/.test(name)) {
+    return null;
+  }
+  return `${owner}/${name}`;
+}
+
+function normalizeBranchRef(branchValue, fallback = "main") {
+  const candidate =
+    typeof branchValue === "string" && branchValue.trim() !== ""
+      ? branchValue.trim()
+      : String(fallback || "main").trim();
+  if (!candidate || candidate.length > 128) return null;
+  if (
+    candidate.includes("..") ||
+    candidate.startsWith("/") ||
+    candidate.endsWith("/") ||
+    candidate.startsWith("-") ||
+    /[\s~^:?*[\]\\]/.test(candidate)
+  ) {
+    return null;
+  }
+  return candidate;
+}
+
 function getGitAuthEnv() {
   const env = { GIT_TERMINAL_PROMPT: "0" };
   const runtimeEnv = gitDeps.env();
@@ -131,16 +163,21 @@ function isGitLockError(err) {
 }
 
 export async function cloneOrPull(repo, branch, workspaceDir) {
-  if (!repo || typeof repo !== "string" || !repo.includes("/")) {
+  const normalizedRepo = normalizeRepoSlug(repo);
+  if (!normalizedRepo) {
     throw new Error("Ungültiges Repo-Format: erwartet 'owner/repo'");
   }
   if (!workspaceDir || typeof workspaceDir !== "string") {
     throw new Error("Workspace-Pfad fehlt oder ist ungültig");
   }
-  const url = getRepositoryUrl(repo);
+  const branchSafe = normalizeBranchRef(branch, "main");
+  if (!branchSafe) {
+    throw new Error(
+      "Ungültiger Branch/Ref. Bitte einen sicheren Git-Ref ohne Sonderzeichen nutzen.",
+    );
+  }
+  const url = getRepositoryUrl(normalizedRepo);
   const gitAuthEnv = getGitAuthEnv();
-  let branchSafe = (branch || "main").replace(/[^a-zA-Z0-9/_.-]/g, "") || "main";
-  branchSafe = branchSafe.replace(/^-+/, "") || "main";
 
   const attempt = async () => {
     if (!gitDeps.existsSync(workspaceDir)) {
@@ -179,7 +216,10 @@ export async function checkoutCommit(workspaceDir, commitSha, branchForFetch) {
   if (!/^[a-f0-9]{40}$/i.test(sha)) {
     throw new Error("commitSha muss ein 40-stelliger Hex-Hash sein");
   }
-  const branchSafe = (branchForFetch || "main").replace(/[^a-zA-Z0-9/_.-]/g, "") || "main";
+  const branchSafe = normalizeBranchRef(branchForFetch, "main");
+  if (!branchSafe) {
+    throw new Error("Ungültiger Branch/Ref für checkoutCommit");
+  }
   const gitAuthEnv = getGitAuthEnv();
   removeStaleGitLock(workspaceDir);
   try {
@@ -193,8 +233,8 @@ export async function checkoutCommit(workspaceDir, commitSha, branchForFetch) {
 
 export async function hasNewCommits(workspaceDir, branch) {
   if (!workspaceDir || !gitDeps.existsSync(workspaceDir)) return false;
-  const branchSafe =
-    (branch || "main").replace(/[^a-zA-Z0-9/_.-]/g, "").replace(/^-+/, "") || "main";
+  const branchSafe = normalizeBranchRef(branch, "main");
+  if (!branchSafe) return false;
   try {
     const gitAuthEnv = getGitAuthEnv();
     removeStaleGitLock(workspaceDir);
