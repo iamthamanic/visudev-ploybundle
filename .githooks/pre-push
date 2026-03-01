@@ -41,6 +41,15 @@ if [ "$run_frontend" = false ] && [ "$run_backend" = false ]; then
   exit 0
 fi
 
+# Enforce single commit when pushing: AI review (commit mode) only reviews HEAD~1..HEAD; older commits would stay unreviewed.
+if git rev-parse --abbrev-ref --symbolic-full-name @{u} >/dev/null 2>&1; then
+  AHEAD=$(git rev-list --count @{u}..HEAD 2>/dev/null || echo "0")
+  if [ -n "$AHEAD" ] && [ "$AHEAD" -gt 1 ] 2>/dev/null; then
+    echo "Pre-push: Mehrere lokale Commits ($AHEAD) gegenüber Upstream. AI-Review prüft nur den letzten. Bitte squashen (z. B. git rebase -i @{u}) oder einzeln pushen." >&2
+    exit 1
+  fi
+fi
+
 # Pre-push: fast checks + AI review in commit mode (only latest commit HEAD~1..HEAD); stable, no shifting diff.
 CHECK_ARGS=()
 [ "$run_frontend" = true ] && CHECK_ARGS+=(--frontend)

@@ -94,7 +94,7 @@ if [[ "$CHECK_MODE" == "full" ]]; then
 else
   # --- Diff-/Commit-Modus: nur geänderte/zu pushende Inhalte oder genau ein Commit ---
   # CHECK_MODE=commit: immer nur letzter Commit (HEAD~1..HEAD), stabil, kein Verschieben des Diffs.
-  # Einschränkung: Bei mehreren lokalen Commits wird nur der neueste geprüft; vor Push/Deploy ggf. squashen oder einzeln pushen.
+  # Bei mehreren lokalen Commits: Pre-Push-Hook verweigert den Push (siehe .githooks/pre-push).
   if [[ "$CHECK_MODE" == "commit" ]]; then
     COMMIT_RANGE="HEAD~1..HEAD"
     if ! "$GIT_CMD" rev-parse --verify HEAD~1 >/dev/null 2>&1; then
