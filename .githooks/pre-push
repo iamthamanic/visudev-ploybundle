@@ -42,9 +42,14 @@ if [ "$run_frontend" = false ] && [ "$run_backend" = false ]; then
 fi
 
 # Enforce single commit when pushing: AI review (commit mode) only reviews HEAD~1..HEAD; older commits would stay unreviewed.
+# Only when upstream exists (normal push); first push (no upstream yet) is not enforced.
 if git rev-parse --abbrev-ref --symbolic-full-name @{u} >/dev/null 2>&1; then
-  AHEAD=$(git rev-list --count @{u}..HEAD 2>/dev/null || echo "0")
-  if [ -n "$AHEAD" ] && [ "$AHEAD" -gt 1 ] 2>/dev/null; then
+  AHEAD=$(git rev-list --count @{u}..HEAD) || { echo "Pre-push: Konnte Commit-Anzahl nicht ermitteln (git rev-list fehlgeschlagen)." >&2; exit 1; }
+  if [ -z "$AHEAD" ] || ! [ "$AHEAD" -ge 0 ] 2>/dev/null; then
+    echo "Pre-push: Ungültige Commit-Anzahl ($AHEAD)." >&2
+    exit 1
+  fi
+  if [ "$AHEAD" -gt 1 ]; then
     echo "Pre-push: Mehrere lokale Commits ($AHEAD) gegenüber Upstream. AI-Review prüft nur den letzten. Bitte squashen (z. B. git rebase -i @{u}) oder einzeln pushen." >&2
     exit 1
   fi
