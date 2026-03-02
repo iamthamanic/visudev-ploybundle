@@ -57,10 +57,17 @@ export default defineConfig({
     target: "esnext",
     outDir: "build",
   },
+  optimizeDeps: {
+    // Avoid scanning runner workspaces / reports that contain foreign test fixtures.
+    entries: ["index.html"],
+  },
   server: {
     port: 3005,
     strictPort: true,
     open: true,
+    watch: {
+      ignored: ["**/preview-runner/workspace/**", "**/playwright-report/**"],
+    },
   },
   preview: {
     port: 3005,

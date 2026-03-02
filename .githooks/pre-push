@@ -41,11 +41,25 @@ if [ "$run_frontend" = false ] && [ "$run_backend" = false ]; then
   exit 0
 fi
 
-# Pre-push: fast checks + AI review only for the diff (what is being pushed). Full codebase review runs separately (refactor mode).
+# Enforce single commit when pushing: AI review (commit mode) only reviews HEAD~1..HEAD; older commits would stay unreviewed.
+# Only when upstream exists (normal push); first push (no upstream yet) is not enforced.
+if git rev-parse --abbrev-ref --symbolic-full-name @{u} >/dev/null 2>&1; then
+  AHEAD=$(git rev-list --count @{u}..HEAD) || { echo "Pre-push: Konnte Commit-Anzahl nicht ermitteln (git rev-list fehlgeschlagen)." >&2; exit 1; }
+  if [ -z "$AHEAD" ] || ! [ "$AHEAD" -ge 0 ] 2>/dev/null; then
+    echo "Pre-push: Ungültige Commit-Anzahl ($AHEAD)." >&2
+    exit 1
+  fi
+  if [ "$AHEAD" -gt 1 ]; then
+    echo "Pre-push: Mehrere lokale Commits ($AHEAD) gegenüber Upstream. AI-Review prüft nur den letzten. Bitte squashen (z. B. git rebase -i @{u}) oder einzeln pushen." >&2
+    exit 1
+  fi
+fi
+
+# Pre-push: fast checks + AI review in commit mode (only latest commit HEAD~1..HEAD); stable, no shifting diff.
 CHECK_ARGS=()
 [ "$run_frontend" = true ] && CHECK_ARGS+=(--frontend)
 [ "$run_backend" = true ] && CHECK_ARGS+=(--backend)
-export CHECK_MODE=diff
+export CHECK_MODE=commit
 bash scripts/run-checks.sh "${CHECK_ARGS[@]}"
 
 # Update README (e.g. "Last updated" line) so it stays in sync on push

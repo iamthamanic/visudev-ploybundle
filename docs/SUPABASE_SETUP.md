@@ -207,3 +207,40 @@ supabase functions deploy visudev-integrations
 ```
 
 Hinweis: Das Frontend und die bestehenden Scripts nutzen weiterhin `src/supabase/` mit `--workdir src`. Das Root-`supabase/` dient der vollständigen Sicherung und dem Restore auf ein neues Projekt.
+
+### Deploy-Fehler: „Unsupported lockfile version '5'“
+
+Der Supabase-Build-Container nutzt eine ältere Deno-Version, die nur Lockfile-Version 4 (oder niedriger) unterstützt. Lokales Deno 2.x erzeugt Lockfile v5 – der Deploy schlägt dann fehl.
+
+**Saubere Lösung (Lockfile nicht löschen):** Lockfile mit Deno 1.x neu erzeugen. Langfristig am besten mit einem Version-Manager (reproduzierbar, pro Projekt, fürs Team dokumentierbar).
+
+#### Option B (empfohlen, langfristig): Version-Manager (mise oder asdf)
+
+So bleibt Deno 1.46 für die Edge Functions reproduzierbar und ihr müsst nicht jedes Mal manuell wechseln.
+
+**Mit [mise](https://mise.jdx.dev/):**
+
+```bash
+# mise installieren (einmalig), z. B. Homebrew: brew install mise
+cd src/supabase/functions/visudev-analyzer
+mise use deno@1.46.0
+deno cache index.tsx
+```
+
+**Mit [asdf](https://asdf-vm.com/) + [asdf-deno](https://github.com/asdf-community/asdf-deno):**
+
+```bash
+asdf plugin add deno
+asdf install deno 1.46.0
+cd src/supabase/functions/visudev-analyzer
+echo "deno 1.46.0" >> .tool-versions
+deno cache index.tsx
+```
+
+Im Verzeichnis `src/supabase/functions/visudev-analyzer` liegt optional eine `.mise.toml` bzw. `.tool-versions` mit `deno 1.46.0` – dann nutzt jeder, der dort arbeitet, automatisch die richtige Version. Danach: `head -2 deno.lock` → `"version": "3"` oder `"4"` (je nach Deno-Version; der Supabase-Container akzeptiert beides), dann `supabase functions deploy visudev-analyzer` aus dem Repo-Root.
+
+#### Option A (Fallback): Einmalig Deno 1.46-Binary
+
+Falls kein Version-Manager gewünscht ist: Deno 1.46 von [GitHub Releases](https://github.com/denoland/deno/releases/tag/v1.46.0) herunterladen, temporär nutzen, im Function-Verzeichnis `deno cache index.tsx` ausführen, Lockfile prüfen, deployen.
+
+Supabase arbeitet an Support für neuere Deno-Versionen; bis dahin bleibt das Lockfile nach der einmaligen Neuerzeugung mit dem Container kompatibel.

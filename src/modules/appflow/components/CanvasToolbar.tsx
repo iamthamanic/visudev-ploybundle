@@ -4,8 +4,7 @@
  */
 
 import clsx from "clsx";
-import { ZoomIn, ZoomOut, Home, Terminal, Monitor, Smartphone } from "lucide-react";
-import type { NodeViewportMode } from "../types";
+import { ZoomIn, ZoomOut, Home, Terminal, LayoutGrid } from "lucide-react";
 import styles from "../styles/LiveFlowCanvas.module.css";
 
 interface CanvasToolbarProps {
@@ -18,10 +17,11 @@ interface CanvasToolbarProps {
   onZoomOut: () => void;
   onZoomIn: () => void;
   onZoomReset: () => void;
-  viewportMode: NodeViewportMode;
-  onViewportModeChange: (mode: NodeViewportMode) => void;
   showTerminal: boolean;
   onToggleTerminal: () => void;
+  /** When true, show "Positionen zurücksetzen" (clear drag overrides). */
+  hasPositionOverrides?: boolean;
+  onResetPositions?: () => void;
 }
 
 export function CanvasToolbar({
@@ -34,10 +34,10 @@ export function CanvasToolbar({
   onZoomOut,
   onZoomIn,
   onZoomReset,
-  viewportMode,
-  onViewportModeChange,
   showTerminal,
   onToggleTerminal,
+  hasPositionOverrides = false,
+  onResetPositions,
 }: CanvasToolbarProps): React.ReactElement {
   return (
     <div className={styles.controls}>
@@ -58,25 +58,20 @@ export function CanvasToolbar({
       <button type="button" onClick={onZoomIn} className={styles.zoomBtn} title="Vergrößern">
         <ZoomIn className={styles.zoomIcon} aria-hidden="true" />
       </button>
-      <button type="button" onClick={onZoomReset} className={styles.zoomBtn} title="Zurücksetzen">
+      <button type="button" onClick={onZoomReset} className={styles.zoomBtn} title="Zoom & Pan zurücksetzen">
         <Home className={styles.zoomIcon} aria-hidden="true" />
       </button>
-      <button
-        type="button"
-        onClick={() => onViewportModeChange("fit-desktop")}
-        className={clsx(styles.zoomBtn, viewportMode === "fit-desktop" && styles.terminalBtnActive)}
-        title="Desktop-Viewport (verhältnistreu skaliert)"
-      >
-        <Monitor className={styles.zoomIcon} aria-hidden="true" />
-      </button>
-      <button
-        type="button"
-        onClick={() => onViewportModeChange("fit-mobile")}
-        className={clsx(styles.zoomBtn, viewportMode === "fit-mobile" && styles.terminalBtnActive)}
-        title="Mobile-Viewport (verhältnistreu skaliert)"
-      >
-        <Smartphone className={styles.zoomIcon} aria-hidden="true" />
-      </button>
+      {hasPositionOverrides && onResetPositions && (
+        <button
+          type="button"
+          onClick={onResetPositions}
+          className={styles.zoomBtn}
+          title="Kartenpositionen auf automatisches Layout zurücksetzen"
+        >
+          <LayoutGrid className={styles.zoomIcon} aria-hidden="true" />
+          <span className={styles.terminalBtnLabel}>Layout</span>
+        </button>
+      )}
       <button
         type="button"
         onClick={onToggleTerminal}
@@ -91,10 +86,7 @@ export function CanvasToolbar({
         <Terminal className={styles.zoomIcon} aria-hidden="true" />
         <span className={styles.terminalBtnLabel}>Logs</span>
       </button>
-      <span className={styles.hint}>
-        Klick auf Kante: Punkt animiert. Bad Gateway/ECONNREFUSED? → Preview-App läuft nicht,
-        „Preview neu starten“. Leere Karten? → X-Frame-Options/CSP in der Preview-App erlauben.
-      </span>
+      <span className={styles.hint}>Klick auf Kante: Punkt animiert.</span>
     </div>
   );
 }

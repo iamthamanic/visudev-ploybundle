@@ -18,14 +18,24 @@ export class ScreenExtractionService {
     return this.extractNavigationLinks(content);
   }
 
+  /** Next.js App Router: app/.../page or src/app/.../page; strip route groups (parentheses). Dedup by path so route aliases / multiple files mapping to same route yield one screen. */
   public extractNextJsAppRouterScreens(files: FileContent[]): Screen[] {
     const screens: Screen[] = [];
+    const seenPaths = new Set<string>();
+    const appPageRegex = /(?:^|\/)(?:src\/)?app\/(.*?)\/page\.(tsx?|jsx?)$/;
 
     files.forEach((file) => {
-      const match = file.path.match(/app\/(.*?)\/page\.(tsx?|jsx?)$/);
+      const match = file.path.match(appPageRegex);
       if (match) {
-        let routePath = `/${match[1] === "" ? "" : match[1]}`;
+        let segmentPath = match[1] ?? "";
+        segmentPath = segmentPath.replace(/\([^)]+\)\/?/g, "").replace(
+          /\/$/,
+          "",
+        );
+        let routePath = segmentPath === "" ? "/" : `/${segmentPath}`;
         routePath = routePath.replace(/\[([^\]]+)\]/g, ":$1");
+        if (seenPaths.has(routePath)) return;
+        seenPaths.add(routePath);
         const segment = routePath === "/"
           ? "Home"
           : (routePath.split("/").filter(Boolean).pop() ?? "Unknown");
@@ -47,11 +57,14 @@ export class ScreenExtractionService {
     return screens;
   }
 
+  /** Next.js Pages: pages/... or src/pages/... (any prefix). Dedup by path to avoid duplicate routes. */
   public extractNextJsPagesRouterScreens(files: FileContent[]): Screen[] {
     const screens: Screen[] = [];
+    const seenPaths = new Set<string>();
+    const pagesRegex = /(?:^|\/)(?:src\/)?pages\/(.*?)\.(tsx?|jsx?)$/;
 
     files.forEach((file) => {
-      const match = file.path.match(/^pages\/(.*?)\.(tsx?|jsx?)$/);
+      const match = file.path.match(pagesRegex);
       if (match) {
         let routePath = `/${match[1]}`;
 
@@ -63,6 +76,8 @@ export class ScreenExtractionService {
         }
 
         routePath = routePath.replace(/\[([^\]]+)\]/g, ":$1");
+        if (seenPaths.has(routePath)) return;
+        seenPaths.add(routePath);
 
         const segment = routePath === "/"
           ? "Home"
@@ -153,11 +168,13 @@ export class ScreenExtractionService {
     return screens;
   }
 
+  /** Nuxt: pages/... or src/pages/... (any prefix). */
   public extractNuxtScreens(files: FileContent[]): Screen[] {
     const screens: Screen[] = [];
+    const nuxtPagesRegex = /(?:^|\/)(?:src\/)?pages\/(.*?)\.vue$/;
 
     files.forEach((file) => {
-      const match = file.path.match(/^pages\/(.*?)\.vue$/);
+      const match = file.path.match(nuxtPagesRegex);
       if (match) {
         let routePath = `/${match[1]}`;
 
@@ -191,24 +208,35 @@ export class ScreenExtractionService {
     return screens;
   }
 
+  /** Heuristic: screens?, pages?, views?, routes? anywhere; components/pages, components/screens. Dedup by id and by path to avoid duplicate routes (e.g. route aliases, multiple files → same path). */
   public extractScreensHeuristic(files: FileContent[]): Screen[] {
     const screens: Screen[] = [];
+    const seenIds = new Set<string>();
+    const seenPaths = new Set<string>();
+
+    const pushScreen = (screen: Screen) => {
+      if (seenIds.has(screen.id)) return;
+      const normPath = (screen.path ?? "").replace(/\/$/, "") || "/";
+      if (seenPaths.has(normPath)) return;
+      seenIds.add(screen.id);
+      seenPaths.add(normPath);
+      screens.push(screen);
+    };
 
     files.forEach((file) => {
-      if (file.path.includes("/components/")) {
-        return;
-      }
+      const pathLower = file.path.toLowerCase();
 
-      const pathMatch = file.path.match(
-        /(?:^|\/(?:src|app)\/)(?:screens?|pages?|views?|routes?)\/([^\/]+)\.(tsx?|jsx?)$/i,
+      const routeFolderMatch = file.path.match(
+        /(?:^|\/)(?:screens?|pages?|views?|routes?)\/([^/]+)\.(tsx?|jsx?)$/i,
       );
-      if (pathMatch) {
-        const screenName = pathMatch[1];
+      if (routeFolderMatch) {
+        const screenName = routeFolderMatch[1];
         const routePath = `/${
-          screenName.toLowerCase().replace(/screen|page|view$/i, "")
+          screenName.toLowerCase().replace(/screen|page|view$/i, "").trim() ||
+          screenName.toLowerCase()
         }`;
 
-        screens.push({
+        pushScreen({
           id: `screen:${file.path}`,
           name: screenName.charAt(0).toUpperCase() + screenName.slice(1),
           path: routePath,
@@ -223,23 +251,25 @@ export class ScreenExtractionService {
       }
 
       const componentMatch = file.path.match(
-        /\/components?\/([^\/]+)\.(tsx?|jsx?)$/,
+        /\/components?\/([^/]+)\.(tsx?|jsx?)$/,
       );
-      if (componentMatch && !file.path.includes("/components/pages/")) {
+      if (componentMatch) {
         const componentName = componentMatch[1];
+        const isPageLike = pathLower.includes("/components/pages/") ||
+          pathLower.includes("/components/screens/") ||
+          (!pathLower.includes("/components/pages/") &&
+            (componentName.endsWith("Screen") ||
+              componentName.endsWith("Page") ||
+              componentName.endsWith("View") ||
+              componentName.length > 8));
 
-        if (
-          /^[A-Z]/.test(componentName) &&
-          (componentName.endsWith("Screen") ||
-            componentName.endsWith("Page") ||
-            componentName.endsWith("View") ||
-            componentName.length > 8)
-        ) {
-          screens.push({
+        if (/^[A-Z]/.test(componentName) && isPageLike) {
+          pushScreen({
             id: `screen:${file.path}`,
             name: componentName,
             path: `/${
-              componentName.toLowerCase().replace(/screen|page|view$/i, "")
+              componentName.toLowerCase().replace(/screen|page|view$/i, "") ||
+              componentName.toLowerCase()
             }`,
             filePath: file.path,
             type: "screen",

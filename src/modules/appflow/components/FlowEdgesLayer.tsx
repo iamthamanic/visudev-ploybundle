@@ -9,7 +9,8 @@ import type { NodePosition } from "../layout";
 import styles from "../styles/LiveFlowCanvas.module.css";
 
 const NODE_WIDTH = 320;
-const NODE_HEIGHT = 240;
+/** Must match LiveFlowCanvas NODE_HEIGHT (card height for 320×240 iframe area). */
+const NODE_HEIGHT = 296;
 
 interface FlowEdgesLayerProps {
   edges: GraphEdge[];

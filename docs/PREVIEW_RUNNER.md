@@ -142,9 +142,9 @@ Der Preview Runner hat einen Build-Test, der **ohne echten Git-Clone** prüft, o
 
 Der Test legt ein minimales Workspace mit `package.json` an, führt `npm ci --ignore-scripts` und `npm run build` aus und räumt danach auf. So kannst du nach Änderungen an `build.js` schnell prüfen, dass der Build-Pfad funktioniert.
 
-## Nach Code-Änderungen am Runner (Neustart)
+## Nach Code-Änderungen (Neustart / Deploy)
 
-Änderungen an `preview-runner/build.js` oder `preview-runner/index.js` werden erst nach einem **Neustart** des Runners wirksam:
+**Preview Runner:** Änderungen an `preview-runner/build.js`, `preview-runner/index.js` oder `preview-runner/docker.js` werden erst nach einem **Neustart** des Runners wirksam:
 
 1. Runner im Terminal mit **Ctrl+C** beenden.
 2. Erneut starten:
@@ -152,6 +152,8 @@ Der Test legt ein minimales Workspace mit `package.json` an, führt `npm ci --ig
    - Echter Build: `USE_REAL_BUILD=1 npm start` (optional mit `GITHUB_TOKEN=…`).
 
 Ohne Neustart läuft weiterhin die alte Version.
+
+**Screen-Analyzer („Neu analysieren“):** Änderungen an der Edge Function `visudev-analyzer` (z. B. unter `supabase/functions/visudev-analyzer/`) werden erst nach **Deploy** wirksam: `supabase functions deploy visudev-analyzer`. Danach im UI „Neu analysieren“ ausführen, damit die verbesserte Screen-Erkennung greift. Siehe auch `docs/SUPABASE_SETUP.md`.
 
 ## Checkliste: alles lokal (ohne Supabase-Secret)
 

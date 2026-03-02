@@ -1,0 +1,4 @@
+# Deno 1.46 for lockfile v4 compatibility with Supabase Edge Runtime build.
+# With mise: cd here, run `deno cache index.tsx` to regenerate deno.lock, then deploy from repo root.
+[tools]
+deno = "1.46.0"

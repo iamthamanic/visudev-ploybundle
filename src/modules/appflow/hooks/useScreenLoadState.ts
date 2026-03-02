@@ -6,26 +6,22 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import type { Screen } from "../../../lib/visudev/types";
-import { normalizePreviewUrl } from "../layout";
+import { getScreenPreviewPath, normalizePreviewUrl } from "../layout";
 
 const SCREEN_LOAD_TIMEOUT_MS = 60_000;
 
 const EMBEDDING_HINT =
   "Tipp: Wenn alle Screens mit Timeout fehlschlagen, blockiert die Preview-App vermutlich Iframe-Einbetten. " +
   "In der Preview-App (z. B. Vite/Express) X-Frame-Options entfernen oder CSP setzen: frame-ancestors 'self' http://localhost:5173 http://localhost:3000; " +
-  "oder in vite.config.ts: server: { headers: { 'Content-Security-Policy': \"frame-ancestors 'self' *\" } }.";
-const AUTH_HINT =
-  "Hinweis: Wenn viele Routen dieselbe Login-Seite zeigen, leitet die App ohne Session auf /login um. " +
-  "Einmal in der Preview-App anmelden (Basis-URL in neuem Tab), danach „Preview aktualisieren“.";
+  "oder in vite.config.ts: server: { headers: { 'Content-Security-Policy': \"frame-ancestors 'self' *\" } }. " +
+  "Alternativ hängen externe Ressourcen (Fonts/APIs/CDNs): in dem Fall Netzwerk/DNS prüfen.";
 
 /** Error -102 (Chromium) = ERR_CONNECTION_REFUSED – nichts hört auf die angegebene URL. */
 export const SCREEN_FAIL_REASONS = {
-  TIMEOUT:
-    "Timeout (60 s). Wahrscheinliche Ursache: Preview-App blockiert Iframe-Einbetten (X-Frame-Options / CSP). In der Preview-App Einbetten erlauben (siehe Terminal-Log).",
+  TIMEOUT: `Timeout (60 s). onLoad wurde nicht ausgelöst. ${EMBEDDING_HINT}`,
   LOAD_ERROR:
     "Ladefehler (z. B. -102 = Verbindung verweigert). Nichts läuft unter der Basis-URL. Lokal: „Preview starten“ (Runner + npx visudev-runner). Deployed-URL: App muss unter dieser URL laufen.",
   NO_URL: "Keine URL: Basis-URL oder Screen-Pfad fehlt.",
-  WILDCARD_ROUTE: "Catch-all Route (*) kann nicht direkt als einzelner Screen geladen werden.",
 } as const;
 
 export type LoadLogEntry = {
@@ -35,55 +31,191 @@ export type LoadLogEntry = {
   type?: "info" | "success" | "error";
 };
 
+type ScreenLoadStatus = "loading" | "loaded" | "failed";
+
+type LoadBootstrap = {
+  hasBaseUrl: boolean;
+  initialState: Record<string, ScreenLoadStatus>;
+  initialReasons: Record<string, string>;
+  logEntries: LoadLogEntry[];
+  screensWithUrl: Array<{ screen: Screen; src: string }>;
+};
+
+function buildLoadBootstrap(
+  screens: Screen[],
+  previewUrl: string,
+  previewError: string | null | undefined,
+): LoadBootstrap {
+  const initialState: Record<string, ScreenLoadStatus> = {};
+  const initialReasons: Record<string, string> = {};
+  const now = new Date().toLocaleTimeString("de-DE");
+  const logEntries: LoadLogEntry[] = [];
+  const screensWithUrl: Array<{ screen: Screen; src: string }> = [];
+
+  if (previewError && previewError.trim()) {
+    logEntries.push({
+      id: "preview-error",
+      time: now,
+      message: `Preview/Build fehlgeschlagen (exakte Fehlermeldung):\n${previewError.trim()}`,
+      type: "error",
+    });
+  }
+
+  const hasBaseUrl =
+    (previewUrl || "").trim().startsWith("http://") ||
+    (previewUrl || "").trim().startsWith("https://");
+
+  if (!hasBaseUrl) {
+    screens.forEach((s) => {
+      initialState[s.id] = "failed";
+      initialReasons[s.id] = SCREEN_FAIL_REASONS.NO_URL;
+    });
+    logEntries.push({
+      id: "no-base-url",
+      time: now,
+      message:
+        "Basis-URL fehlt. Bitte „Preview starten“ (oder Seite neu laden) oder im Projekt eine Deployed-URL setzen.",
+      type: "info",
+    });
+    return { hasBaseUrl, initialState, initialReasons, logEntries, screensWithUrl };
+  }
+
+  screens.forEach((s) => {
+    const src = normalizePreviewUrl(previewUrl, getScreenPreviewPath(s));
+    if (src) {
+      screensWithUrl.push({ screen: s, src });
+      initialState[s.id] = "loading";
+    } else {
+      initialState[s.id] = "failed";
+      initialReasons[s.id] = SCREEN_FAIL_REASONS.NO_URL;
+    }
+  });
+
+  logEntries.push({
+    id: "step-start",
+    time: now,
+    message: `Schritt 1: Starte Ladevorgang für ${screensWithUrl.length} Screen(s). Basis-URL: ${previewUrl}. Timeout pro Screen: ${SCREEN_LOAD_TIMEOUT_MS / 1000} s.`,
+    type: "info",
+  });
+
+  screens.forEach((s) => {
+    const path = getScreenPreviewPath(s);
+    const src = normalizePreviewUrl(previewUrl, path);
+    if (!src) {
+      logEntries.push({
+        id: `${s.id}-no-url`,
+        time: new Date().toLocaleTimeString("de-DE"),
+        message: `✗ ${s.name} (${path}): Keine URL – Basis-URL oder Screen-Pfad fehlt. Basis-URL war: ${previewUrl || "(leer)"}`,
+        type: "error",
+      });
+      return;
+    }
+
+    logEntries.push({
+      id: `${s.id}-start`,
+      time: new Date().toLocaleTimeString("de-DE"),
+      message: `Schritt 2: Iframe für "${s.name}" (Pfad: ${path}) eingebunden. URL: ${src}. Warte auf onLoad oder Timeout.`,
+      type: "info",
+    });
+  });
+
+  return { hasBaseUrl, initialState, initialReasons, logEntries, screensWithUrl };
+}
+
+function buildLoadContextKey(
+  screens: Screen[],
+  previewUrl: string,
+  previewError: string | null | undefined,
+): string {
+  const screenKey = screens.map((s) => `${s.id}:${s.name}:${s.path ?? ""}`).join("|");
+  return `${(previewUrl || "").trim()}__${(previewError || "").trim()}__${screenKey}`;
+}
+
 export function useScreenLoadState(
   screens: Screen[],
   previewUrl: string,
   previewError: string | null | undefined,
 ): {
-  screenLoadState: Record<string, "loading" | "loaded" | "failed">;
+  screenLoadState: Record<string, ScreenLoadStatus>;
   screenFailReason: Record<string, string>;
   loadLogs: LoadLogEntry[];
   setLoadLogs: React.Dispatch<React.SetStateAction<LoadLogEntry[]>>;
-  markScreenLoaded: (screenId: string, screenName?: string) => void;
+  markScreenLoaded: (
+    screenId: string,
+    screenName?: string,
+    source?: "onLoad" | "dom-report" | "timeout-fallback",
+  ) => void;
   markScreenFailed: (screenId: string, reason: string, screenName?: string, url?: string) => void;
 } {
-  const [screenLoadState, setScreenLoadState] = useState<
-    Record<string, "loading" | "loaded" | "failed">
-  >({});
-  const [screenFailReason, setScreenFailReason] = useState<Record<string, string>>({});
-  const [loadLogs, setLoadLogs] = useState<LoadLogEntry[]>([]);
-  const loadTimeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-  const embeddingHintLoggedRef = useRef(false);
-  const lastInitKeyRef = useRef<string>("");
-  const screenSignature = useMemo(
-    () =>
-      screens
-        .map((s) => `${s.id}|${s.name}|${s.path || ""}`)
-        .sort()
-        .join("||"),
-    [screens],
+  const contextKey = useMemo(
+    () => buildLoadContextKey(screens, previewUrl, previewError),
+    [screens, previewUrl, previewError],
   );
+  const bootstrapCacheRef = useRef<{ key: string; value: LoadBootstrap } | null>(null);
+  if (!bootstrapCacheRef.current || bootstrapCacheRef.current.key !== contextKey) {
+    bootstrapCacheRef.current = {
+      key: contextKey,
+      value: buildLoadBootstrap(screens, previewUrl, previewError),
+    };
+  }
+  const bootstrap = bootstrapCacheRef.current.value;
 
-  const markScreenLoaded = useCallback((screenId: string, screenName?: string) => {
-    const t = loadTimeoutsRef.current.get(screenId);
-    if (t) {
-      clearTimeout(t);
-      loadTimeoutsRef.current.delete(screenId);
-    }
-    const name = screenName ?? screenId;
-    setLoadLogs((prev) => [
-      ...prev,
-      {
-        id: `${screenId}-loaded-${Date.now()}`,
-        time: new Date().toLocaleTimeString("de-DE"),
-        message: `✓ ${name}: onLoad ausgelöst (Dokument geladen). Leere Karte? Dann blockiert die App Einbetten (X-Frame-Options/CSP) oder liefert leere Seite.`,
-        type: "success" as const,
-      },
-    ]);
-    setScreenLoadState((prev) =>
-      prev[screenId] === "failed" ? prev : { ...prev, [screenId]: "loaded" },
-    );
-  }, []);
+  const [screenLoadState, setScreenLoadState] = useState<Record<string, ScreenLoadStatus>>(
+    bootstrap.initialState,
+  );
+  const [screenFailReason, setScreenFailReason] = useState<Record<string, string>>(
+    bootstrap.initialReasons,
+  );
+  const [loadLogs, setLoadLogs] = useState<LoadLogEntry[]>(bootstrap.logEntries);
+  const loadTimeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const screenLoadStateRef = useRef<Record<string, ScreenLoadStatus>>(bootstrap.initialState);
+  const screenFailReasonRef = useRef<Record<string, string>>(bootstrap.initialReasons);
+  const contextKeyRef = useRef(contextKey);
+
+  const markScreenLoaded = useCallback(
+    (
+      screenId: string,
+      screenName?: string,
+      source: "onLoad" | "dom-report" | "timeout-fallback" = "onLoad",
+    ) => {
+      const t = loadTimeoutsRef.current.get(screenId);
+      if (t) {
+        clearTimeout(t);
+        loadTimeoutsRef.current.delete(screenId);
+      }
+      const currentStatus = screenLoadStateRef.current[screenId];
+      if (currentStatus === "loaded" || currentStatus === "failed") return;
+      const name = screenName ?? screenId;
+      setLoadLogs((prev) => [
+        ...prev,
+        {
+          id: `${screenId}-loaded-${Date.now()}`,
+          time: new Date().toLocaleTimeString("de-DE"),
+          message:
+            source === "dom-report"
+              ? `✓ ${name}: DOM-Report aus dem Iframe empfangen (Dokument aktiv).`
+              : source === "timeout-fallback"
+                ? `✓ ${name}: Nach Timeout als geladen markiert (Seite könnte noch Ressourcen laden).`
+                : `✓ ${name}: onLoad ausgelöst (Dokument geladen). Leere Karte? „In neuem Tab öffnen“ auf der Karte testen – wenn dort Inhalt sichtbar ist, blockiert die App die Einbettung (CSP/X-Frame-Options). Sonst: App liefert leere Seite (z. B. Auth, fehlende Env).`,
+          type: "success" as const,
+        },
+      ]);
+      setScreenLoadState((prev) => {
+        if (prev[screenId] === "failed") return prev;
+        const next = { ...prev, [screenId]: "loaded" as const };
+        screenLoadStateRef.current = next;
+        return next;
+      });
+      setScreenFailReason((prev) => {
+        if (!(screenId in prev)) return prev;
+        const next = { ...prev };
+        delete next[screenId];
+        screenFailReasonRef.current = next;
+        return next;
+      });
+    },
+    [],
+  );
 
   const markScreenFailed = useCallback(
     (screenId: string, reason: string, screenName?: string, url?: string) => {
@@ -103,137 +235,81 @@ export function useScreenLoadState(
           type: "error" as const,
         },
       ]);
-      setScreenLoadState((prev) => ({ ...prev, [screenId]: "failed" }));
-      setScreenFailReason((prev) => ({ ...prev, [screenId]: reason }));
+      setScreenLoadState((prev) => {
+        if (prev[screenId] === "failed" && screenFailReasonRef.current[screenId] === reason) {
+          return prev;
+        }
+        const next = { ...prev, [screenId]: "failed" as const };
+        screenLoadStateRef.current = next;
+        return next;
+      });
+      setScreenFailReason((prev) => {
+        if (prev[screenId] === reason) return prev;
+        const next = { ...prev, [screenId]: reason };
+        screenFailReasonRef.current = next;
+        return next;
+      });
     },
     [],
   );
 
   useEffect(() => {
-    const initKey = `${previewUrl}::${screenSignature}::${previewError || ""}`;
-    if (lastInitKeyRef.current === initKey) return;
-    lastInitKeyRef.current = initKey;
+    const keepTerminalStates = contextKeyRef.current === contextKey;
+    contextKeyRef.current = contextKey;
+
     loadTimeoutsRef.current.forEach((t) => clearTimeout(t));
     loadTimeoutsRef.current.clear();
-    embeddingHintLoggedRef.current = false;
-    const initial: Record<string, "loading" | "loaded" | "failed"> = {};
-    const reasons: Record<string, string> = {};
-    const now = new Date().toLocaleTimeString("de-DE");
-    const logEntries: LoadLogEntry[] = [];
+    const nextState: Record<string, ScreenLoadStatus> = { ...bootstrap.initialState };
+    const nextReasons: Record<string, string> = { ...bootstrap.initialReasons };
 
-    if (previewError && previewError.trim()) {
-      logEntries.push({
-        id: "preview-error",
-        time: now,
-        message: `Preview/Build fehlgeschlagen (exakte Fehlermeldung):\n${previewError.trim()}`,
-        type: "error",
+    if (keepTerminalStates) {
+      Object.keys(nextState).forEach((screenId) => {
+        const previousStatus = screenLoadStateRef.current[screenId];
+        if (previousStatus === "loaded") {
+          nextState[screenId] = "loaded";
+          delete nextReasons[screenId];
+          return;
+        }
+        if (previousStatus === "failed") {
+          nextState[screenId] = "failed";
+          if (screenFailReasonRef.current[screenId]) {
+            nextReasons[screenId] = screenFailReasonRef.current[screenId];
+          }
+        }
       });
     }
 
-    const hasBaseUrl =
-      (previewUrl || "").trim().startsWith("http://") ||
-      (previewUrl || "").trim().startsWith("https://");
-    if (!hasBaseUrl) {
-      screens.forEach((s) => {
-        initial[s.id] = "failed";
-        reasons[s.id] = SCREEN_FAIL_REASONS.NO_URL;
-      });
-      logEntries.push({
-        id: "no-base-url",
-        time: now,
-        message:
-          "Basis-URL fehlt. Bitte „Preview starten“ (oder Seite neu laden) oder im Projekt eine Deployed-URL setzen.",
-        type: "info",
-      });
-      setLoadLogs(logEntries);
-      setScreenLoadState(initial);
-      setScreenFailReason(reasons);
-      return;
-    }
+    screenLoadStateRef.current = nextState;
+    screenFailReasonRef.current = nextReasons;
+    setScreenLoadState(nextState);
+    setScreenFailReason(nextReasons);
+    setLoadLogs((prev) => {
+      if (!keepTerminalStates || prev.length === 0) return bootstrap.logEntries;
+      const hasBootstrapLog = prev.some(
+        (entry) =>
+          entry.id === "step-start" || entry.id === "no-base-url" || entry.id === "preview-error",
+      );
+      if (hasBootstrapLog) return prev;
+      return [...bootstrap.logEntries, ...prev];
+    });
 
-    const screensWithUrl = screens.filter((s) => normalizePreviewUrl(previewUrl, s.path || "/"));
-    const hasLoginLikeScreen = screens.some((s) => {
-      const path = (s.path || "").toLowerCase();
-      const name = (s.name || "").toLowerCase();
-      return path === "/login" || path.endsWith("/login") || name.includes("login");
-    });
-    logEntries.push({
-      id: "step-start",
-      time: now,
-      message: `Schritt 1: Starte Ladevorgang für ${screensWithUrl.length} Screen(s). Basis-URL: ${previewUrl}. Timeout pro Screen: ${SCREEN_LOAD_TIMEOUT_MS / 1000} s.`,
-      type: "info",
-    });
-    if (hasLoginLikeScreen && screensWithUrl.length > 1) {
-      logEntries.push({
-        id: "auth-hint",
-        time: now,
-        message: AUTH_HINT,
-        type: "info",
-      });
-    }
+    if (!bootstrap.hasBaseUrl) return;
 
-    screens.forEach((s) => {
-      const src = normalizePreviewUrl(previewUrl, s.path || "/");
-      if (!src) {
-        const isWildcard =
-          (s.path || "").trim() === "*" ||
-          (s.path || "").trim() === "/*" ||
-          (s.path || "").trim().endsWith("/*");
-        const reason = isWildcard ? SCREEN_FAIL_REASONS.WILDCARD_ROUTE : SCREEN_FAIL_REASONS.NO_URL;
-        initial[s.id] = "failed";
-        reasons[s.id] = reason;
-        logEntries.push({
-          id: `${s.id}-no-url`,
-          time: new Date().toLocaleTimeString("de-DE"),
-          message: `✗ ${s.name} (${s.path || "/"}): ${reason} Basis-URL war: ${previewUrl || "(leer)"}`,
-          type: "error",
-        });
-      } else {
-        initial[s.id] = "loading";
-        logEntries.push({
-          id: `${s.id}-start`,
-          time: new Date().toLocaleTimeString("de-DE"),
-          message: `Schritt 2: Iframe für "${s.name}" (Pfad: ${s.path || "/"}) eingebunden. URL: ${src}. Warte auf onLoad oder Timeout.`,
-          type: "info",
-        });
-        const t = setTimeout(() => {
-          setScreenLoadState((prev) => ({ ...prev, [s.id]: "failed" }));
-          setScreenFailReason((prev) => ({ ...prev, [s.id]: SCREEN_FAIL_REASONS.TIMEOUT }));
-          setLoadLogs((prev) => {
-            const next = [
-              ...prev,
-              {
-                id: `${s.id}-timeout-${Date.now()}`,
-                time: new Date().toLocaleTimeString("de-DE"),
-                message: `✗ ${s.name} fehlgeschlagen: Timeout nach ${SCREEN_LOAD_TIMEOUT_MS / 1000} s (onLoad wurde nicht ausgelöst). Exakte URL: ${src}`,
-                type: "error" as const,
-              },
-            ];
-            if (!embeddingHintLoggedRef.current) {
-              embeddingHintLoggedRef.current = true;
-              next.push({
-                id: `embedding-hint-${Date.now()}`,
-                time: new Date().toLocaleTimeString("de-DE"),
-                message: EMBEDDING_HINT,
-                type: "info",
-              });
-            }
-            return next;
-          });
-          loadTimeoutsRef.current.delete(s.id);
-        }, SCREEN_LOAD_TIMEOUT_MS);
-        loadTimeoutsRef.current.set(s.id, t);
-      }
+    bootstrap.screensWithUrl.forEach(({ screen }) => {
+      if (nextState[screen.id] !== "loading") return;
+      const t = setTimeout(() => {
+        loadTimeoutsRef.current.delete(screen.id);
+        markScreenLoaded(screen.id, screen.name, "timeout-fallback");
+      }, SCREEN_LOAD_TIMEOUT_MS);
+      loadTimeoutsRef.current.set(screen.id, t);
     });
-    setLoadLogs(logEntries);
-    setScreenLoadState(initial);
-    setScreenFailReason(reasons);
+
     const timeouts = loadTimeoutsRef.current;
     return () => {
       timeouts.forEach((t) => clearTimeout(t));
       timeouts.clear();
     };
-  }, [previewUrl, screens, screenSignature, previewError]);
+  }, [contextKey, bootstrap, markScreenLoaded]);
 
   return {
     screenLoadState,

@@ -1,6 +1,13 @@
 // VisuDEV Core Types
 export type ScanStatus = "idle" | "running" | "completed" | "failed";
 export type ScreenshotStatus = "none" | "pending" | "ok" | "failed";
+export type StepLogType = "info" | "success" | "error";
+
+export interface StepLogEntry {
+  time: string;
+  message: string;
+  type?: StepLogType;
+}
 
 export interface Screen {
   id: string;
@@ -86,6 +93,7 @@ export interface ScanResult {
   scanType: "appflow" | "blueprint" | "data";
   status: ScanStatus;
   progress: number;
+  logs?: StepLogEntry[];
   result?: AnalysisResult;
   errorMessage?: string;
   startedAt: string;

@@ -2,7 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { resolveStartEnv } from "./build-env.js";
 
-const runtimeDeps = Object.freeze({
+const defaultRuntimeDeps = Object.freeze({
   spawn,
   spawnSync,
   existsSync,
@@ -16,6 +16,23 @@ const runtimeDeps = Object.freeze({
   stderrWrite: (text) => process.stderr.write(text),
 });
 
+let runtimeDepsOverride = null;
+
+export function configureBuildRuntimeDeps(overrides = null) {
+  if (!overrides || typeof overrides !== "object") {
+    runtimeDepsOverride = null;
+    return;
+  }
+  runtimeDepsOverride = Object.freeze({
+    ...defaultRuntimeDeps,
+    ...overrides,
+  });
+}
+
+export function resetBuildRuntimeDeps() {
+  runtimeDepsOverride = null;
+}
+
 export function getBuildRuntimeDeps() {
-  return runtimeDeps;
+  return runtimeDepsOverride || defaultRuntimeDeps;
 }

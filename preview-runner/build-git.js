@@ -1,23 +1,40 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { warnNonFatal } from "./build-logging.js";
 
-const gitDeps = Object.freeze({
+const defaultGitDeps = Object.freeze({
   spawn,
   existsSync,
   mkdirSync,
+  rmSync,
   statSync,
   unlinkSync,
   now: () => Date.now(),
   env: () => process.env,
   warn: (...args) => console.warn(...args),
 });
+let gitDeps = defaultGitDeps;
 
 const GIT_LOCK_MAX_AGE_MS = 5 * 60 * 1000;
 const KNOWN_GIT_CANDIDATES = ["/usr/bin/git", "/opt/homebrew/bin/git", "/usr/local/bin/git"];
 const GIT_SUBCOMMANDS = new Set(["clone", "fetch", "checkout", "pull", "rev-parse", "rev-list"]);
 const GITHUB_EXTRAHEADER_KEY = "http.https://github.com/.extraheader";
+
+export function configureBuildGitDeps(overrides = null) {
+  if (!overrides || typeof overrides !== "object") {
+    gitDeps = defaultGitDeps;
+    return;
+  }
+  gitDeps = Object.freeze({
+    ...defaultGitDeps,
+    ...overrides,
+  });
+}
+
+export function resetBuildGitDeps() {
+  gitDeps = defaultGitDeps;
+}
 
 function resolveGitBinary() {
   const env = gitDeps.env();
@@ -158,6 +175,15 @@ function isGitLockError(err) {
   return msg.includes("index.lock");
 }
 
+function isGitDirtyWorkspaceError(err) {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    msg.includes("cannot pull with rebase: You have unstaged changes") ||
+    msg.includes("Please commit or stash") ||
+    msg.includes("would be overwritten by merge")
+  );
+}
+
 export async function cloneOrPull(repo, branch, workspaceDir) {
   const normalizedRepo = normalizeRepoSlug(repo);
   if (!normalizedRepo) {
@@ -199,6 +225,20 @@ export async function cloneOrPull(repo, branch, workspaceDir) {
   } catch (err) {
     if (isGitLockError(err) && removeStaleGitLock(workspaceDir)) {
       return await attempt();
+    }
+    if (isGitDirtyWorkspaceError(err) && gitDeps.existsSync(workspaceDir)) {
+      const parent = join(workspaceDir, "..");
+      gitDeps.warn(
+        `  [git] Workspace dirty (${workspaceDir}), entferne lokalen Clone und klone neu.`,
+      );
+      gitDeps.rmSync(workspaceDir, { recursive: true, force: true });
+      gitDeps.mkdirSync(parent, { recursive: true });
+      await runGit(
+        parent,
+        ["clone", "--depth", "1", "-b", branchSafe, url, workspaceDir],
+        gitAuthEnv,
+      );
+      return "recloned";
     }
     throw err;
   }

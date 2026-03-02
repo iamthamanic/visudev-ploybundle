@@ -9,6 +9,8 @@ import { resolve } from "node:path";
 
 const DOCKER_IMAGE = process.env.VISUDEV_DOCKER_IMAGE || "node:20-alpine";
 const CONTAINER_PORT = 3000;
+/** Clean build artifacts and caches before build to avoid stale output (set to "0" to disable). */
+const CLEAN_BEFORE_BUILD = process.env.PREVIEW_CLEAN_BEFORE_BUILD !== "0";
 const MAX_LOG_TOKEN_LENGTH = 10_000;
 
 function sanitizeContainerLogText(text) {
@@ -71,9 +73,15 @@ function exec(cmd, args, opts = {}) {
  */
 export async function runContainer(workspaceDir, appPort, runId) {
   const name = containerName(runId);
+  // Optional: clean build outputs and caches to avoid stale artifacts from previous runs
+  const cleanStep = CLEAN_BEFORE_BUILD
+    ? "rm -rf dist .next out .vite node_modules/.cache 2>/dev/null; "
+    : "";
   // Install → build → serve: Ausgabeordner automatisch wählen (dist | build | out | .)
   const cmd =
-    "(npm ci --ignore-scripts 2>/dev/null || npm install --ignore-scripts) && npm run build && " +
+    "(npm ci --include=dev --ignore-scripts 2>/dev/null || npm ci --ignore-scripts 2>/dev/null || npm install --include=dev --ignore-scripts 2>/dev/null || npm install --ignore-scripts) && " +
+    cleanStep +
+    "npm run build && " +
     '(D=dist; [ -d build ] && D=build; [ -d out ] && D=out; [ ! -d "$D" ] && D=.; exec npx serve "$D" -s -l ' +
     CONTAINER_PORT +
     ")";
@@ -92,8 +100,6 @@ export async function runContainer(workspaceDir, appPort, runId) {
     `${mount}:/app`,
     "-w",
     "/app",
-    "-e",
-    "NODE_ENV=production",
     DOCKER_IMAGE,
     "sh",
     "-c",
@@ -131,8 +137,11 @@ export async function getContainerStatus(containerName) {
     };
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    console.warn(`[docker] inspect failed (${containerName}): ${msg}`);
-    return null;
+    return {
+      state: null,
+      exitCode: null,
+      error: `[docker inspect fehlgeschlagen] ${sanitizeContainerLogText(msg)}`,
+    };
   }
 }
 
@@ -167,6 +176,7 @@ export async function getContainerLogs(containerName, tail = 120, maxChars = 12_
 
 /**
  * Stoppt und entfernt den Container (--rm entfernt automatisch, stop reicht).
+ * Wirft nicht, wenn der Container nicht existiert (z. B. nach Runner-Neustart).
  * @param {string} runId - derselbe runId wie bei runContainer
  */
 export async function stopContainer(runId) {
@@ -175,7 +185,12 @@ export async function stopContainer(runId) {
     await exec("docker", ["stop", "-t", "3", name]);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    console.warn(`[docker] stop skipped (${name}): ${msg}`);
+    const isNoSuchContainer =
+      /no such (container|object)/i.test(msg) || /No such container/i.test(msg);
+    if (isNoSuchContainer) {
+      return;
+    }
+    throw new Error(`[docker stop fehlgeschlagen] ${name}: ${sanitizeContainerLogText(msg)}`);
   }
 }
 

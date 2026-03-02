@@ -9,7 +9,7 @@ import type {
   IntegrationsUpdateInput,
   GitHubRepo,
 } from "../lib/visudev/integrations";
-import type { PreviewMode, PreviewRuntimeOptions, Project } from "../lib/visudev/types";
+import type { PreviewMode, Project } from "../lib/visudev/types";
 import type {
   AppFlowCreateInput,
   AppFlowRecord,
@@ -25,22 +25,6 @@ import type {
 } from "../modules/data/types";
 import type { LogCreateInput, LogEntry } from "../modules/logs/types";
 import type { ProjectCreateInput, ProjectUpdateInput } from "../modules/projects/types";
-import {
-  discoverPreviewRunner,
-  getPreviewRunnerRuntimeStatus,
-  localPreviewRefresh,
-  localPreviewStart,
-  localPreviewStatus,
-  localPreviewStop,
-  localPreviewStopProject,
-  localRunnerGuard,
-  resolvePreviewMode,
-} from "./preview-runner-local";
-import type {
-  PreviewRunnerRuntimeStatus,
-  PreviewStatusResponse,
-  PreviewStepLog,
-} from "./preview-runner-local";
 import { publicAnonKey, supabaseUrl } from "./supabase/info";
 
 const BASE_URL = `${supabaseUrl}/functions/v1`;
@@ -74,7 +58,7 @@ async function apiRequest<T>(
     try {
       result = text ? (JSON.parse(text) as typeof result) : {};
     } catch {
-      console.error(`API [${endpoint}]: response is not JSON (status ${response.status})`);
+      console.error(`API [${endpoint}]: response is not JSON`, text.slice(0, 150));
       const isPreview = endpoint.includes("preview");
       const is404 = response.status === 404;
       let errorMsg: string;
@@ -370,8 +354,782 @@ export const integrationsAPI = {
   },
 };
 
-export { discoverPreviewRunner, getPreviewRunnerRuntimeStatus };
-export type { PreviewRunnerRuntimeStatus, PreviewStatusResponse, PreviewStepLog };
+// ==================== PREVIEW (Live App) ====================
+
+/** When set (e.g. http://127.0.0.1:4000), frontend calls the Preview Runner directly; no Edge Function or Supabase secret needed. In dev we default to 127.0.0.1:4000 so "npm run dev" works without .env. */
+const localRunnerUrl =
+  (typeof import.meta !== "undefined" && import.meta.env?.VITE_PREVIEW_RUNNER_URL) ||
+  (typeof import.meta !== "undefined" && import.meta.env?.DEV ? "http://127.0.0.1:4000" : "") ||
+  "";
+
+/** Nach fehlgeschlagenem Request ggf. gefundene Runner-URL (z. B. wenn Runner auf 4100 läuft). */
+let discoveredRunnerUrl: string | null = null;
+
+const RUNNER_PORT_CANDIDATES = [4000, 4100, 4110, 4120, 4130];
+
+/** Prüft, ob eine URL mit /health erreichbar ist (kurzer Timeout). */
+async function checkRunnerHealth(baseUrl: string): Promise<boolean> {
+  try {
+    const c = new AbortController();
+    const t = setTimeout(() => c.abort(), 1500);
+    const r = await fetch(`${baseUrl.replace(/\/$/, "")}/health`, {
+      method: "GET",
+      signal: c.signal,
+    });
+    clearTimeout(t);
+    return r.status === 200;
+  } catch {
+    return false;
+  }
+}
+
+/** Sucht unter Kandidaten-Ports (4000, 4100, …) nach einem laufenden Runner; setzt discoveredRunnerUrl. */
+async function discoverRunnerUrl(): Promise<string | null> {
+  const hosts = ["localhost", "127.0.0.1"];
+  for (const port of RUNNER_PORT_CANDIDATES) {
+    for (const host of hosts) {
+      const url = `http://${host}:${port}`;
+      if (await checkRunnerHealth(url)) {
+        discoveredRunnerUrl = url;
+        return url;
+      }
+    }
+  }
+  return null;
+}
+
+/** URL für den lokalen Runner (env oder zuvor per Discovery gefunden). */
+function getEffectiveRunnerUrl(): string {
+  return discoveredRunnerUrl ?? localRunnerUrl;
+}
+
+function resolvePreviewMode(previewMode?: PreviewMode): "local" | "central" | "deployed" {
+  if (previewMode === "local") return "local";
+  if (previewMode === "central") return "central";
+  if (previewMode === "deployed") return "deployed";
+  return localRunnerUrl ? "local" : "central";
+}
+
+function localRunnerGuard(): { ok: boolean; error?: string } {
+  const url = getEffectiveRunnerUrl();
+  if (!url) {
+    return {
+      ok: false,
+      error: "VisuDEV starten (im Projektordner: npm run dev), dann erneut versuchen.",
+    };
+  }
+  return { ok: true };
+}
+
+export interface LocalPreviewRunnerHealth {
+  reachable: boolean;
+  baseUrl: string | null;
+  mode: "docker" | "real" | "stub" | null;
+  activeRuns: number | null;
+  useDocker: boolean;
+  dockerAvailable: boolean | null;
+  error?: string;
+}
+
+export interface LocalPreviewRunnerRun {
+  runId: string;
+  projectId: string;
+  repo: string;
+  branchOrCommit: string;
+  status: string;
+  previewUrl: string | null;
+  startedAt: string | null;
+  readyAt: string | null;
+  stoppedAt: string | null;
+}
+
+export interface LocalPreviewRunnerRunsSnapshot {
+  reachable: boolean;
+  baseUrl: string | null;
+  totals: {
+    total: number;
+    active: number;
+    ready: number;
+    starting: number;
+    failed: number;
+    stopped: number;
+  };
+  runs: LocalPreviewRunnerRun[];
+  error?: string;
+}
+
+async function requestRunnerHealth(baseUrl: string): Promise<{
+  ok: boolean;
+  status: number;
+  data?: Record<string, unknown>;
+  error?: string;
+}> {
+  try {
+    const c = new AbortController();
+    const t = setTimeout(() => c.abort(), 2000);
+    const res = await fetch(`${baseUrl.replace(/\/$/, "")}/health`, {
+      method: "GET",
+      signal: c.signal,
+    });
+    clearTimeout(t);
+    const text = await res.text();
+    let data: Record<string, unknown> | undefined;
+    try {
+      data = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+    } catch {
+      data = undefined;
+    }
+    if (!res.ok) {
+      return {
+        ok: false,
+        status: res.status,
+        data,
+        error: (typeof data?.error === "string" ? data.error : undefined) ?? String(res.status),
+      };
+    }
+    return { ok: true, status: res.status, data };
+  } catch (error) {
+    return { ok: false, status: 0, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function requestRunnerRuns(
+  baseUrl: string,
+  projectId?: string | null,
+): Promise<{
+  ok: boolean;
+  status: number;
+  data?: Record<string, unknown>;
+  error?: string;
+}> {
+  try {
+    const c = new AbortController();
+    const t = setTimeout(() => c.abort(), 2500);
+    const params = new URLSearchParams();
+    params.set("includeStopped", "1");
+    if (projectId) params.set("projectId", projectId);
+    const path = `/runs?${params.toString()}`;
+    const res = await fetch(`${baseUrl.replace(/\/$/, "")}${path}`, {
+      method: "GET",
+      headers: projectId ? runnerHeaders(projectId) : undefined,
+      signal: c.signal,
+    });
+    clearTimeout(t);
+    const text = await res.text();
+    let data: Record<string, unknown> | undefined;
+    try {
+      data = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+    } catch {
+      data = undefined;
+    }
+    if (!res.ok) {
+      return {
+        ok: false,
+        status: res.status,
+        data,
+        error: (typeof data?.error === "string" ? data.error : undefined) ?? String(res.status),
+      };
+    }
+    return { ok: true, status: res.status, data };
+  } catch (error) {
+    return { ok: false, status: 0, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function readRunString(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function readRunNullableString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function readRunNumber(value: unknown, fallback = 0): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function parseRunnerRunsPayload(payload?: Record<string, unknown>): {
+  totals: LocalPreviewRunnerRunsSnapshot["totals"];
+  runs: LocalPreviewRunnerRun[];
+} {
+  const totalsRecord =
+    payload?.totals && typeof payload.totals === "object" && !Array.isArray(payload.totals)
+      ? (payload.totals as Record<string, unknown>)
+      : {};
+  const runsRaw = Array.isArray(payload?.runs) ? payload.runs : [];
+  const runs: LocalPreviewRunnerRun[] = runsRaw
+    .filter((item) => item != null && typeof item === "object" && !Array.isArray(item))
+    .map((item) => {
+      const entry = item as Record<string, unknown>;
+      return {
+        runId: readRunString(entry.runId),
+        projectId: readRunString(entry.projectId),
+        repo: readRunString(entry.repo),
+        branchOrCommit: readRunString(entry.branchOrCommit),
+        status: readRunString(entry.status, "unknown"),
+        previewUrl: readRunNullableString(entry.previewUrl),
+        startedAt: readRunNullableString(entry.startedAt),
+        readyAt: readRunNullableString(entry.readyAt),
+        stoppedAt: readRunNullableString(entry.stoppedAt),
+      };
+    })
+    .filter((entry) => entry.runId.length > 0);
+
+  return {
+    totals: {
+      total: readRunNumber(totalsRecord.total, runs.length),
+      active: readRunNumber(
+        totalsRecord.active,
+        runs.filter((entry) => entry.status !== "stopped").length,
+      ),
+      ready: readRunNumber(
+        totalsRecord.ready,
+        runs.filter((entry) => entry.status === "ready").length,
+      ),
+      starting: readRunNumber(
+        totalsRecord.starting,
+        runs.filter((entry) => entry.status === "starting").length,
+      ),
+      failed: readRunNumber(
+        totalsRecord.failed,
+        runs.filter((entry) => entry.status === "failed").length,
+      ),
+      stopped: readRunNumber(
+        totalsRecord.stopped,
+        runs.filter((entry) => entry.status === "stopped").length,
+      ),
+    },
+    runs,
+  };
+}
+
+/** Runtime-Status des lokalen Preview-Runners inkl. Docker-Verfügbarkeit (falls Docker-Modus aktiv). */
+export async function getLocalPreviewRunnerHealth(): Promise<LocalPreviewRunnerHealth> {
+  let base = getEffectiveRunnerUrl().replace(/\/$/, "");
+  if (!base) {
+    const found = await discoverRunnerUrl();
+    if (!found) {
+      return {
+        reachable: false,
+        baseUrl: null,
+        mode: null,
+        activeRuns: null,
+        useDocker: false,
+        dockerAvailable: null,
+        error: "Preview Runner nicht erreichbar.",
+      };
+    }
+    base = found.replace(/\/$/, "");
+  }
+
+  let out = await requestRunnerHealth(base);
+  if (!out.ok) {
+    const found = await discoverRunnerUrl();
+    if (found) {
+      const discovered = found.replace(/\/$/, "");
+      if (discovered !== base) {
+        base = discovered;
+        out = await requestRunnerHealth(base);
+      }
+    }
+  }
+  if (!out.ok) {
+    return {
+      reachable: false,
+      baseUrl: base || null,
+      mode: null,
+      activeRuns: null,
+      useDocker: false,
+      dockerAvailable: null,
+      error: out.error ?? "Preview Runner nicht erreichbar.",
+    };
+  }
+
+  const modeRaw = out.data?.mode;
+  const mode = modeRaw === "docker" || modeRaw === "real" || modeRaw === "stub" ? modeRaw : null;
+  const useDocker =
+    typeof out.data?.useDocker === "boolean" ? out.data.useDocker : mode === "docker";
+  const dockerAvailable =
+    typeof out.data?.dockerAvailable === "boolean" ? out.data.dockerAvailable : null;
+  const activeRunsRaw = out.data?.activeRuns;
+  const activeRuns =
+    typeof activeRunsRaw === "number" && Number.isFinite(activeRunsRaw) ? activeRunsRaw : null;
+
+  return {
+    reachable: true,
+    baseUrl: base,
+    mode,
+    activeRuns,
+    useDocker,
+    dockerAvailable,
+  };
+}
+
+/** Runtime-Snapshot des lokalen Preview-Runners inkl. aktueller/gestoppter Runs. */
+export async function getLocalPreviewRunnerRuns(
+  projectId?: string | null,
+): Promise<LocalPreviewRunnerRunsSnapshot> {
+  let base = getEffectiveRunnerUrl().replace(/\/$/, "");
+  if (!base) {
+    const found = await discoverRunnerUrl();
+    if (!found) {
+      return {
+        reachable: false,
+        baseUrl: null,
+        totals: { total: 0, active: 0, ready: 0, starting: 0, failed: 0, stopped: 0 },
+        runs: [],
+        error: "Preview Runner nicht erreichbar.",
+      };
+    }
+    base = found.replace(/\/$/, "");
+  }
+
+  let out = await requestRunnerRuns(base, projectId);
+  if (!out.ok) {
+    const found = await discoverRunnerUrl();
+    if (found) {
+      const discovered = found.replace(/\/$/, "");
+      if (discovered !== base) {
+        base = discovered;
+        out = await requestRunnerRuns(base, projectId);
+      }
+    }
+  }
+
+  if (!out.ok) {
+    return {
+      reachable: false,
+      baseUrl: base || null,
+      totals: { total: 0, active: 0, ready: 0, starting: 0, failed: 0, stopped: 0 },
+      runs: [],
+      error: out.error ?? "Runner-Runs konnten nicht geladen werden.",
+    };
+  }
+
+  const parsed = parseRunnerRunsPayload(out.data);
+  return {
+    reachable: true,
+    baseUrl: base,
+    totals: parsed.totals,
+    runs: parsed.runs,
+  };
+}
+
+/** projectId -> runId when using local runner */
+const localRunIds = new Map<string, string>();
+/** projectId -> projectToken when using local runner */
+const localProjectTokens = new Map<string, string>();
+const RUNNER_STATUS_TIMEOUT_MS = 3000;
+
+const PREVIEW_RUNID_KEY = "visudev_preview_runId_";
+const PREVIEW_PROJECT_TOKEN_KEY = "visudev_preview_project_token_";
+const PROJECT_TOKEN_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
+
+function sanitizeProjectToken(token: unknown): string | null {
+  if (typeof token !== "string") return null;
+  const trimmed = token.trim();
+  if (!PROJECT_TOKEN_PATTERN.test(trimmed)) return null;
+  return trimmed;
+}
+
+/** Side effect: reads from in-memory cache and optionally localStorage. Persisted per projectId across reloads. */
+function getStoredRunId(projectId: string): string | null {
+  let runId = localRunIds.get(projectId) ?? null;
+  if (!runId && typeof localStorage !== "undefined") {
+    runId = localStorage.getItem(PREVIEW_RUNID_KEY + projectId);
+    if (runId) localRunIds.set(projectId, runId);
+  }
+  return runId;
+}
+
+/** Side effect: writes to in-memory cache and localStorage. Callers must be aware of persistence. */
+function setStoredRunId(projectId: string, runId: string): void {
+  localRunIds.set(projectId, runId);
+  if (typeof localStorage !== "undefined") {
+    localStorage.setItem(PREVIEW_RUNID_KEY + projectId, runId);
+  }
+}
+
+function clearStoredRunId(projectId: string): void {
+  localRunIds.delete(projectId);
+  if (typeof localStorage !== "undefined") {
+    localStorage.removeItem(PREVIEW_RUNID_KEY + projectId);
+  }
+}
+
+/** Side effect: reads from in-memory cache, then sessionStorage/localStorage. Persisted per projectId. */
+function getStoredProjectToken(projectId: string): string | null {
+  let token = localProjectTokens.get(projectId) ?? null;
+  if (!token && typeof sessionStorage !== "undefined") {
+    token = sanitizeProjectToken(sessionStorage.getItem(PREVIEW_PROJECT_TOKEN_KEY + projectId));
+  }
+  if (!token && typeof localStorage !== "undefined") {
+    token = sanitizeProjectToken(localStorage.getItem(PREVIEW_PROJECT_TOKEN_KEY + projectId));
+  }
+  if (token) localProjectTokens.set(projectId, token);
+  return token;
+}
+
+/** Side effect: writes token to in-memory cache, sessionStorage and localStorage. Behavior is history-dependent. */
+function setStoredProjectToken(projectId: string, token: string): void {
+  const validToken = sanitizeProjectToken(token);
+  if (!validToken) return;
+  localProjectTokens.set(projectId, validToken);
+  if (typeof sessionStorage !== "undefined") {
+    sessionStorage.setItem(PREVIEW_PROJECT_TOKEN_KEY + projectId, validToken);
+  }
+  if (typeof localStorage !== "undefined") {
+    localStorage.setItem(PREVIEW_PROJECT_TOKEN_KEY + projectId, validToken);
+  }
+}
+
+function clearStoredProjectToken(projectId: string): void {
+  localProjectTokens.delete(projectId);
+  if (typeof sessionStorage !== "undefined") {
+    sessionStorage.removeItem(PREVIEW_PROJECT_TOKEN_KEY + projectId);
+  }
+  if (typeof localStorage !== "undefined") {
+    localStorage.removeItem(PREVIEW_PROJECT_TOKEN_KEY + projectId);
+  }
+}
+
+function clearPreviewSession(projectId: string): void {
+  clearStoredRunId(projectId);
+  clearStoredProjectToken(projectId);
+}
+
+function runnerHeaders(projectId: string, withJson = false): HeadersInit {
+  const headers: Record<string, string> = {};
+  if (withJson) headers["Content-Type"] = "application/json";
+  const token = getStoredProjectToken(projectId);
+  if (token) headers["X-VisuDev-Project-Token"] = token;
+  return headers;
+}
+
+async function localPreviewStart(
+  projectId: string,
+  options?: { repo?: string; branchOrCommit?: string; commitSha?: string },
+): Promise<{
+  success: boolean;
+  data?: { runId: string; status: string; reusedExistingRun?: boolean };
+  error?: string;
+}> {
+  let base = getEffectiveRunnerUrl().replace(/\/$/, "");
+  const body = JSON.stringify({
+    projectId,
+    repo: options?.repo,
+    branchOrCommit: options?.branchOrCommit ?? "main",
+    commitSha: options?.commitSha ?? undefined,
+  });
+
+  const doFetch = async (urlBase: string): Promise<{ res: Response; text: string }> => {
+    const res = await fetch(`${urlBase}/start`, {
+      method: "POST",
+      headers: runnerHeaders(projectId, true),
+      body,
+    });
+    const text = await res.text();
+    return { res, text };
+  };
+
+  const parseStartPayload = (
+    textPayload: string,
+  ): {
+    success?: boolean;
+    runId?: string;
+    status?: string;
+    reusedExistingRun?: boolean;
+    error?: string;
+    projectToken?: string;
+  } | null => {
+    try {
+      return textPayload
+        ? (JSON.parse(textPayload) as {
+            success?: boolean;
+            runId?: string;
+            status?: string;
+            reusedExistingRun?: boolean;
+            error?: string;
+            projectToken?: string;
+          })
+        : {};
+    } catch {
+      return null;
+    }
+  };
+
+  const requestStart = async (): Promise<
+    | { ok: true; data: { runId: string; status: string; reusedExistingRun?: boolean } }
+    | { ok: false; status: number; error: string }
+  > => {
+    let res: Response;
+    let text = "";
+    try {
+      const out = await doFetch(base);
+      res = out.res;
+      text = out.text;
+    } catch {
+      const found = await discoverRunnerUrl();
+      if (found) {
+        base = found.replace(/\/$/, "");
+        try {
+          const out = await doFetch(base);
+          res = out.res;
+          text = out.text;
+        } catch {
+          return {
+            ok: false,
+            status: 0,
+            error: `Preview Runner nicht erreichbar. Läuft der Runner? (lokal: ${base})`,
+          };
+        }
+      } else {
+        return {
+          ok: false,
+          status: 0,
+          error:
+            "Preview Runner nicht erreichbar. Läuft der Runner? (lokal: http://127.0.0.1:4000 oder http://localhost:4000)",
+        };
+      }
+    }
+
+    const data = parseStartPayload(text);
+    if (data == null) {
+      return { ok: false, status: res.status, error: "Runner response not JSON" };
+    }
+    if (data.projectToken) setStoredProjectToken(projectId, data.projectToken);
+    if (!res.ok) {
+      return {
+        ok: false,
+        status: res.status,
+        error: (data.error as string) || String(res.status),
+      };
+    }
+    if (data.runId) setStoredRunId(projectId, data.runId);
+    return {
+      ok: true,
+      data: {
+        runId: data.runId!,
+        status: data.status ?? "starting",
+        reusedExistingRun: data.reusedExistingRun === true,
+      },
+    };
+  };
+
+  const first = await requestStart();
+  if (first.ok) return { success: true, data: first.data };
+
+  if (first.status === 401 || first.status === 403) {
+    // Recovery for stale/missing token: clear local token+runId and retry once.
+    clearPreviewSession(projectId);
+    const retry = await requestStart();
+    if (retry.ok) return { success: true, data: retry.data };
+    return { success: false, error: retry.error };
+  }
+
+  return { success: false, error: first.error };
+}
+
+async function localPreviewStatus(projectId: string): Promise<{
+  success: boolean;
+  status?: "idle" | "starting" | "ready" | "failed" | "stopped";
+  runId?: string | null;
+  previewUrl?: string;
+  error?: string;
+  logs?: PreviewStepLog[];
+}> {
+  const runId = getStoredRunId(projectId);
+  if (!runId) return { success: true, status: "idle" };
+  let base = getEffectiveRunnerUrl().replace(/\/$/, "");
+  const doStatusFetch = async (urlBase: string) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), RUNNER_STATUS_TIMEOUT_MS);
+    try {
+      const response = await fetch(`${urlBase}/status/${encodeURIComponent(runId)}`, {
+        headers: runnerHeaders(projectId),
+        signal: controller.signal,
+      });
+      const bodyText = await response.text();
+      return { response, bodyText };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  let res: Response;
+  let text: string;
+  try {
+    const out = await doStatusFetch(base);
+    res = out.response;
+    text = out.bodyText;
+  } catch {
+    const found = await discoverRunnerUrl();
+    if (found) {
+      base = found.replace(/\/$/, "");
+      try {
+        const out = await doStatusFetch(base);
+        res = out.response;
+        text = out.bodyText;
+      } catch {
+        return {
+          success: false,
+          error: `Preview Runner nicht erreichbar. Läuft der Runner? (lokal: ${base})`,
+        };
+      }
+    } else {
+      return {
+        success: false,
+        error:
+          "Preview Runner nicht erreichbar. Läuft der Runner? (lokal: http://127.0.0.1:4000 oder http://localhost:4000)",
+      };
+    }
+  }
+  let data: {
+    success?: boolean;
+    runId?: string;
+    status?: string;
+    previewUrl?: string;
+    error?: string;
+    logs?: PreviewStepLog[];
+  };
+  try {
+    data = text ? (JSON.parse(text) as typeof data) : {};
+  } catch {
+    return { success: false, error: "Runner response not JSON" };
+  }
+  if (!res.ok) {
+    if (res.status === 404) {
+      clearPreviewSession(projectId);
+      return { success: true, status: "idle" };
+    }
+    if (res.status === 401 || res.status === 403) {
+      clearStoredProjectToken(projectId);
+    }
+    return { success: false, error: (data.error as string) || String(res.status) };
+  }
+  const status = (data.status as PreviewStatusResponse["status"]) ?? "idle";
+  const responseRunId = typeof data.runId === "string" ? data.runId : runId;
+  if (status === "idle" || status === "stopped") {
+    clearPreviewSession(projectId);
+  } else if (responseRunId) {
+    setStoredRunId(projectId, responseRunId);
+  }
+  return {
+    success: true,
+    status,
+    runId: responseRunId ?? null,
+    previewUrl: data.previewUrl,
+    error: data.error,
+    logs: Array.isArray(data.logs) ? data.logs : undefined,
+  };
+}
+
+async function localPreviewStop(projectId: string): Promise<{ success: boolean; error?: string }> {
+  const runId = getStoredRunId(projectId);
+  if (!runId) return { success: true };
+  const base = getEffectiveRunnerUrl().replace(/\/$/, "");
+  const res = await fetch(`${base}/stop/${encodeURIComponent(runId)}`, {
+    method: "POST",
+    headers: runnerHeaders(projectId),
+  });
+  const text = await res.text();
+  let data: { success?: boolean; error?: string };
+  try {
+    data = text ? (JSON.parse(text) as typeof data) : {};
+  } catch {
+    return { success: false, error: "Runner response not JSON" };
+  }
+  if (!res.ok) {
+    if (res.status === 404 || res.status === 401 || res.status === 403)
+      clearPreviewSession(projectId);
+    return { success: false, error: (data.error as string) || String(res.status) };
+  }
+  clearPreviewSession(projectId);
+  return { success: true };
+}
+
+async function localPreviewStopProject(
+  projectId: string,
+): Promise<{ success: boolean; error?: string; stopped?: number }> {
+  const runId = getStoredRunId(projectId);
+  const base = getEffectiveRunnerUrl().replace(/\/$/, "");
+  const res = await fetch(`${base}/stop-project/${encodeURIComponent(projectId)}`, {
+    method: "POST",
+    headers: runnerHeaders(projectId),
+  });
+  const text = await res.text();
+  let data: { success?: boolean; error?: string; stopped?: number };
+  try {
+    data = text ? (JSON.parse(text) as typeof data) : {};
+  } catch {
+    return { success: false, error: "Runner response not JSON" };
+  }
+  if (!res.ok) {
+    if (res.status === 404 || res.status === 401 || res.status === 403)
+      clearPreviewSession(projectId);
+    return { success: false, error: (data.error as string) || String(res.status) };
+  }
+  // Local run metadata is project-scoped; clear after explicit project stop.
+  clearPreviewSession(projectId);
+  return {
+    success: true,
+    stopped: typeof data.stopped === "number" ? data.stopped : runId ? 1 : 0,
+  };
+}
+
+/** Refresh preview: pull latest from repo, rebuild, restart (live update). Only with local runner. */
+async function localPreviewRefresh(
+  projectId: string,
+): Promise<{ success: boolean; error?: string }> {
+  const runId = getStoredRunId(projectId);
+  if (!runId)
+    return {
+      success: false,
+      error: "Kein aktiver Preview für dieses Projekt (Seite neu laden und Preview neu starten).",
+    };
+  const base = getEffectiveRunnerUrl().replace(/\/$/, "");
+  const res = await fetch(`${base}/refresh`, {
+    method: "POST",
+    headers: runnerHeaders(projectId, true),
+    body: JSON.stringify({ runId }),
+  });
+  const text = await res.text();
+  let data: { success?: boolean; error?: string };
+  try {
+    data = text ? (JSON.parse(text) as typeof data) : {};
+  } catch {
+    return { success: false, error: "Runner response not JSON" };
+  }
+  if (!res.ok) {
+    if (res.status === 404 || res.status === 401 || res.status === 403)
+      clearPreviewSession(projectId);
+    return { success: false, error: (data.error as string) || String(res.status) };
+  }
+  return { success: true };
+}
+
+/** Single log line from preview start/refresh (Runner or Edge). */
+export interface PreviewStepLog {
+  time: string;
+  message: string;
+}
+
+export interface PreviewStatusResponse {
+  success: boolean;
+  runId?: string;
+  status?: "idle" | "starting" | "ready" | "failed" | "stopped";
+  previewUrl?: string;
+  error?: string;
+  startedAt?: string;
+  expiresAt?: string;
+  logs?: PreviewStepLog[];
+}
+
+/** Läuft einmal im Hintergrund, um den Runner zu finden (z. B. auf Port 4100), wenn 4000 nicht erreichbar ist. Beim ersten Start/Status wird die gefundene URL gecacht. */
+export async function discoverPreviewRunner(): Promise<void> {
+  if (localRunnerUrl || (typeof import.meta !== "undefined" && import.meta.env?.DEV)) {
+    await discoverRunnerUrl();
+  }
+}
 
 export const previewAPI = {
   /** Start preview (build/run app from repo via Preview Runner). Pass repo/branch/commitSha when project not in backend KV. */
@@ -382,11 +1140,13 @@ export const previewAPI = {
       branchOrCommit?: string;
       commitSha?: string;
       accessToken?: string;
-      bootMode?: PreviewRuntimeOptions["bootMode"];
-      injectSupabasePlaceholders?: PreviewRuntimeOptions["injectSupabasePlaceholders"];
     },
     previewMode?: PreviewMode,
-  ): Promise<{ success: boolean; data?: { runId: string; status: string }; error?: string }> => {
+  ): Promise<{
+    success: boolean;
+    data?: { runId: string; status: string; reusedExistingRun?: boolean };
+    error?: string;
+  }> => {
     const mode = resolvePreviewMode(previewMode);
     if (mode === "deployed") {
       return {
@@ -451,33 +1211,33 @@ export const previewAPI = {
     });
   },
 
-  /** Stop all preview runs bound to one project. */
+  /** Stop all active runs for a project (local mode). Useful for timeout cleanup. */
   stopProject: async (
     projectId: string,
     previewMode?: PreviewMode,
     accessToken?: string,
-  ): Promise<{ success: boolean; error?: string }> => {
+  ): Promise<{ success: boolean; error?: string; stopped?: number }> => {
     const mode = resolvePreviewMode(previewMode);
     if (mode === "deployed") {
-      return { success: true };
+      return { success: true, stopped: 0 };
     }
     if (mode === "local") {
       const guard = localRunnerGuard();
       if (!guard.ok) return { success: false, error: guard.error };
       return localPreviewStopProject(projectId);
     }
-    return apiRequest<{ status: string }>("/visudev-preview/preview/stop", {
+    const out = await apiRequest<{ status: string }>("/visudev-preview/preview/stop", {
       method: "POST",
       body: JSON.stringify({ projectId }),
       accessToken,
     });
+    return { success: out.success, error: out.error, stopped: out.success ? 1 : 0 };
   },
 
   /** Refresh preview: pull latest from repo, rebuild, restart (live). Only with local runner. */
   refresh: async (
     projectId: string,
     previewMode?: PreviewMode,
-    options?: PreviewRuntimeOptions,
   ): Promise<{ success: boolean; error?: string }> => {
     const mode = resolvePreviewMode(previewMode);
     if (mode === "deployed") {
@@ -486,7 +1246,7 @@ export const previewAPI = {
     if (mode === "local") {
       const guard = localRunnerGuard();
       if (!guard.ok) return { success: false, error: guard.error };
-      return localPreviewRefresh(projectId, options);
+      return localPreviewRefresh(projectId);
     }
     return { success: false, error: "Refresh only with local runner (VITE_PREVIEW_RUNNER_URL)" };
   },

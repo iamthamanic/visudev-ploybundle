@@ -372,9 +372,20 @@
   padding: 0.5rem 1rem;
 }
 
+.liveAppLabelBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
 .liveAppLabel {
   color: var(--color-muted-foreground);
   font-size: 0.875rem;
+}
+
+.liveAppLabelMeta {
+  color: var(--color-subtle);
+  font-size: 0.75rem;
 }
 
 .liveAppBarUrl {

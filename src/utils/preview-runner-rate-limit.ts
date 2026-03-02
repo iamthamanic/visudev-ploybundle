@@ -26,6 +26,11 @@ function writeTimestamp(storage: Storage, key: string, value: number): void {
   }
 }
 
+/**
+ * Client-side cooldown only (UX); does not replace server enforcement.
+ * Side effect: writes last-action timestamp to sessionStorage/localStorage (history-dependent).
+ * The runner enforces its own rate limit (enforceWriteRateLimit) for write endpoints.
+ */
 export function claimPreviewRunnerAction(
   projectId: string,
   action: PreviewRunnerAction,

@@ -28,6 +28,9 @@ preview-runner/workspace/
 playwright-report/
 test-results/
 
+# Lockfile backups (e.g. deno.lock.v5.backup after regenerating with Deno 1.x)
+*.lock.*.backup
+
 # IDE / OS
 .DS_Store
 *.log

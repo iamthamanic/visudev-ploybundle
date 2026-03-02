@@ -92,13 +92,21 @@ export class ScreenService extends BaseService {
       }
     }
 
-    if (files.some((file) => /app\/.*\/page\.(tsx?|jsx?)$/.test(file.path))) {
+    if (
+      files.some((file) =>
+        /(?:^|\/)(?:src\/)?app\/(?:.*\/)?page\.(tsx?|jsx?)$/.test(file.path)
+      )
+    ) {
       if (!detected.includes("next.js")) detected.push("next.js");
       detected.push("nextjs-app-router");
       confidence = Math.max(confidence, 0.95);
     }
 
-    if (files.some((file) => /^pages\/.*\.(tsx?|jsx?)$/.test(file.path))) {
+    if (
+      files.some((file) =>
+        /(?:^|\/)(?:src\/)?pages\/.+\.(tsx?|jsx?)$/.test(file.path)
+      )
+    ) {
       if (!detected.includes("next.js")) detected.push("next.js");
       detected.push("nextjs-pages-router");
       confidence = Math.max(confidence, 0.95);
@@ -116,7 +124,9 @@ export class ScreenService extends BaseService {
       confidence = Math.max(confidence, 0.85);
     }
 
-    if (files.some((file) => /^pages\/.*\.vue$/.test(file.path))) {
+    if (
+      files.some((file) => /(?:^|\/)(?:src\/)?pages\/.*\.vue$/.test(file.path))
+    ) {
       if (!detected.includes("nuxt")) detected.push("nuxt");
       confidence = Math.max(confidence, 0.95);
     }

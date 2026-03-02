@@ -17,72 +17,43 @@ export interface GraphEdge {
   type: "navigate" | "call";
 }
 
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-export function normalizeRoutePath(path: string): string {
-  const raw = (path || "").trim();
-  if (!raw) return "/";
-  const withoutQuery = raw.split("?")[0]?.split("#")[0] ?? raw;
-  const withLeadingSlash = withoutQuery.startsWith("/") ? withoutQuery : `/${withoutQuery}`;
-  const collapsed = withLeadingSlash.replace(/\/{2,}/g, "/");
-  if (collapsed.length > 1 && collapsed.endsWith("/")) return collapsed.slice(0, -1);
-  return collapsed || "/";
-}
-
-export function pathToRouteRegex(patternPath: string): RegExp {
-  const normalized = normalizeRoutePath(patternPath);
-  const parts = normalized.split("/").filter(Boolean);
-  if (parts.length === 0) return /^\/$/i;
-  const pattern = parts
-    .map((segment) => {
-      if (segment === "*") return ".*";
-      if (segment.startsWith(":")) return "[^/]+";
-      return escapeRegex(segment);
-    })
-    .join("/");
-  return new RegExp(`^/${pattern}/?$`, "i");
-}
-
-export function matchScreenPath(screenPath: string, routePath: string): boolean {
-  const screenNormalized = normalizeRoutePath(screenPath || "/");
-  const routeNormalized = normalizeRoutePath(routePath || "/");
-  if (screenNormalized === routeNormalized) return true;
-  return pathToRouteRegex(screenNormalized).test(routeNormalized);
-}
-
-function normalizeScreenPathForPreview(screenPath: string): string {
-  const raw = (screenPath || "/").trim();
-  if (!raw) return "/";
-  if (/^javascript:/i.test(raw)) return "";
-
-  // Catch-all routes (e.g. "*" or "/*") are not directly previewable as a concrete screen.
-  if (/^\*+$/.test(raw) || raw === "/*") return "";
-
-  const withLeadingSlash = raw.startsWith("/") ? raw : `/${raw}`;
-  let path = withLeadingSlash;
-
-  // Replace route params with deterministic sample values: /user/:id -> /user/1
-  path = path.replace(/\/:([A-Za-z0-9_]+)\??/g, "/1");
-
-  // Strip trailing wildcard fragments: /admin/* -> /admin
-  path = path.replace(/\/\*+$/g, "");
-
-  // Normalize duplicate slashes and ensure root fallback.
-  path = path.replace(/\/{2,}/g, "/");
-  if (!path) return "/";
-  if (!path.startsWith("/")) return `/${path}`;
-  return path;
+/**
+ * Derives a preview path for a screen when path is missing or generic.
+ * Matches Shell routes: projects -> / or /projects, AppFlowPage -> /appflow, etc.
+ */
+export function getScreenPreviewPath(screen: Screen): string {
+  const p = (screen.path || "").trim();
+  if (p && p !== "/") return p;
+  const name = (screen.name || "").trim();
+  if (!name) return "/";
+  const lower = name.toLowerCase().replace(/page|screen|view$/i, "").trim();
+  if (lower === "projects" || lower === "shell" || name === "ProjectsPage") return "/projects";
+  if (lower === "appflow" || name === "AppFlowPage") return "/appflow";
+  if (lower === "blueprint" || name === "BlueprintPage") return "/blueprint";
+  if (lower === "data" || name === "DataPage") return "/data";
+  if (lower === "logs" || name === "LogsPage") return "/logs";
+  if (lower === "settings" || name === "SettingsPage") return "/settings";
+  return `/${lower || name.toLowerCase()}`;
 }
 
 export function normalizePreviewUrl(base: string, screenPath: string): string {
   const trimmed = (base || "").trim();
   if (!trimmed || (!trimmed.startsWith("http://") && !trimmed.startsWith("https://"))) return "";
-  const safePath = normalizeScreenPathForPreview(screenPath || "/");
-  if (!safePath) return "";
+  const path = (screenPath || "/").trim();
+  const safePath =
+    path.startsWith("/") && !path.includes("//") && !path.toLowerCase().includes("javascript:")
+      ? path
+      : path.startsWith("/")
+        ? path
+        : `/${path}`;
   const baseClean = trimmed.replace(/\/$/, "");
   return `${baseClean}${safePath}`;
+}
+
+/** Segment for visudev-screen query param (so Shell can show correct tab even if server rewrites path). */
+export function previewPathToSegment(previewPath: string): string {
+  const p = (previewPath || "/").replace(/\/$/, "").slice(1).trim();
+  return p === "" || p === "projects" ? "projects" : p;
 }
 
 export function getScreenDepths(screens: Screen[]): Map<string, number> {
@@ -111,7 +82,9 @@ export function getScreenDepths(screens: Screen[]): Map<string, number> {
     visited.add(screen.id);
     depths.set(screen.id, depth);
     (screen.navigatesTo || []).forEach((targetPath) => {
-      const target = screens.find((s) => matchScreenPath(s.path || "/", targetPath || "/"));
+      const target = screens.find(
+        (s) => s.path === targetPath || (targetPath && s.path.includes(targetPath)),
+      );
       if (target && !visited.has(target.id)) queue.push({ screen: target, depth: depth + 1 });
     });
   }
@@ -135,7 +108,9 @@ export function buildEdges(screens: Screen[], flows: Flow[]): GraphEdge[] {
 
   screens.forEach((source) => {
     (source.navigatesTo || []).forEach((targetPath) => {
-      const target = screens.find((s) => matchScreenPath(s.path || "/", targetPath || "/"));
+      const target = screens.find(
+        (s) => s.path === targetPath || (targetPath && s.path.includes(targetPath)),
+      );
       if (target && target.id !== source.id)
         edges.push({ fromId: source.id, toId: target.id, type: "navigate" });
     });
@@ -151,6 +126,15 @@ export function buildEdges(screens: Screen[], flows: Flow[]): GraphEdge[] {
         edges.push({ fromId: fromScreenId, toId: toScreenId, type: "call" });
     });
   });
+
+  if (edges.length === 0 && screens.length >= 2) {
+    const root =
+      screens.find((s) => s.path === "/" || s.path === "/projects" || s.path === "/ProjectsPage") ??
+      screens[0];
+    screens.forEach((target) => {
+      if (target.id !== root.id) edges.push({ fromId: root.id, toId: target.id, type: "navigate" });
+    });
+  }
 
   return edges;
 }
