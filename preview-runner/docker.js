@@ -195,6 +195,36 @@ export async function stopContainer(runId) {
 }
 
 /**
+ * Streamt Container-Logs (docker logs -f). Gibt den Child-Prozess zurück, damit er mit .kill() beendet werden kann.
+ * @param {string} containerNameOrId - Container-Name oder -ID
+ * @param {(msg: string) => void} onMessage - Callback pro Zeile (bereits sanitized)
+ * @returns {import('node:child_process').ChildProcess | null}
+ */
+export function streamContainerLogs(containerNameOrId, onMessage) {
+  if (!containerNameOrId || typeof onMessage !== "function") return null;
+  try {
+    const child = spawn("docker", ["logs", "-f", "--tail", "0", containerNameOrId], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const push = (text) => {
+      const raw = String(text || "").trim();
+      if (!raw) return;
+      const s = sanitizeContainerLogText(raw);
+      s.split(/\r?\n/).forEach((line) => {
+        const t = line.trim();
+        if (t) onMessage(t);
+      });
+    };
+    child.stdout?.on("data", (d) => push(d.toString()));
+    child.stderr?.on("data", (d) => push(d.toString()));
+    child.on("error", () => {});
+    return child;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Prüft, ob Docker verfügbar ist.
  * @returns {Promise<boolean>}
  */

@@ -24,7 +24,7 @@ export function AuthDialog({ open, onOpenChange }: AuthDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent data-visudev-modal="auth">
         <DialogHeader>
           <DialogTitle>{tab === "login" ? "Anmelden" : "Konto erstellen"}</DialogTitle>
         </DialogHeader>

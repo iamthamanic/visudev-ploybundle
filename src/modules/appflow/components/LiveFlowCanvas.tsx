@@ -41,6 +41,8 @@ interface LiveFlowCanvasProps {
   screens: Screen[];
   flows: Flow[];
   previewUrl: string;
+  /** Wenn false, werden DOM-Reports geleert (Kanten starten wieder am rechten Kartenrand bis Preview neu sendet). */
+  isLivePreviewActive?: boolean;
   projectId?: string;
   /** Aktive Runner-Run-ID für klare Zuordnung der Logs. */
   previewRunId?: string | null;
@@ -60,6 +62,7 @@ export function LiveFlowCanvas({
   screens,
   flows,
   previewUrl,
+  isLivePreviewActive = false,
   projectId,
   previewRunId = null,
   analysisLogs = [],
@@ -85,12 +88,15 @@ export function LiveFlowCanvas({
   const [dotPosition, setDotPosition] = useState<{ x: number; y: number } | null>(null);
   /** When set, this screen card is focused (highlight) and others dimmed; cleared after FOCUS_HIGHLIGHT_MS. */
   const [focusedScreenId, setFocusedScreenId] = useState<string | null>(null);
-  /** Last visudev-dom-report per screen id (from iframe postMessage). */
+  /** Last visudev-dom-report per screen id (from iframe postMessage). Cleared when preview ends or screens change. */
   const [domReportsByScreenId, setDomReportsByScreenId] = useState<
     Record<string, VisudevDomReport>
   >({});
+  /** Edge key (fromId-toId) of the clicked edge; used for green highlight, gray default. */
+  const [selectedEdgeKey, setSelectedEdgeKey] = useState<string | null>(null);
   const [showTerminal, setShowTerminal] = useState(false);
   const focusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevLivePreviewActiveRef = useRef(isLivePreviewActive);
 
   const { screenLoadState, screenFailReason, loadLogs, markScreenLoaded, markScreenFailed } =
     useScreenLoadState(screens, previewUrl, previewError);
@@ -132,8 +138,28 @@ export function LiveFlowCanvas({
     return map;
   }, [screens, computedPositions, positionOverrides]);
   const edges = useMemo(() => buildEdges(screens, flows), [screens, flows]);
-  /** Only navigation edges on canvas to avoid clutter from flow-call edges (141 → ~42 for 7 screens). */
-  const navigateEdges = useMemo(() => edges.filter((e) => e.type === "navigate"), [edges]);
+  /** UI edges: navigate, open-modal, switch-tab (exclude call edges to avoid clutter). */
+  const uiEdges = useMemo(() => edges.filter((e) => e.type !== "call"), [edges]);
+  /** First dom report that has navItems (Shell sidebar). Used when edge.fromId has no report so lines still start at tab positions. */
+  const fallbackDomReport = useMemo(() => {
+    const reports = Object.values(domReportsByScreenId);
+    return reports.find((r) => r.navItems && r.navItems.length > 0) ?? null;
+  }, [domReportsByScreenId]);
+
+  /* Clear DOM reports when live preview ends (lines fall back to right edge until preview sends again). */
+  useEffect(() => {
+    if (prevLivePreviewActiveRef.current && !isLivePreviewActive) {
+      setDomReportsByScreenId({});
+    }
+    prevLivePreviewActiveRef.current = isLivePreviewActive;
+  }, [isLivePreviewActive]);
+
+  /* Clear DOM reports and selection when screens or flows change (e.g. after "Neu analysieren") so lines redraw from analysis. */
+  const analysisKey = `${screens.map((s) => s.id).join(",")}-${flows.length}`;
+  useEffect(() => {
+    setDomReportsByScreenId({});
+    setSelectedEdgeKey(null);
+  }, [analysisKey]);
 
   useEffect(() => {
     if (!projectId || typeof window === "undefined") return;
@@ -174,12 +200,17 @@ export function LiveFlowCanvas({
     }
   }, [showTerminal, analysisLogs, loadLogs, refreshLogs, refreshInProgress]);
 
-  const maxX = screens.length
-    ? Math.max(...Array.from(positions.values()).map((p) => p.x), 0) + NODE_WIDTH + 80
+  const positionValues = Array.from(positions.values());
+  const minX = positionValues.length ? Math.min(...positionValues.map((p) => p.x), 0) : 0;
+  const minY = positionValues.length ? Math.min(...positionValues.map((p) => p.y), 0) : 0;
+  const maxX = positionValues.length
+    ? Math.max(...positionValues.map((p) => p.x), 0) + NODE_WIDTH + 80
     : 0;
-  const maxY = screens.length
-    ? Math.max(...Array.from(positions.values()).map((p) => p.y), 0) + NODE_HEIGHT + 80
+  const maxY = positionValues.length
+    ? Math.max(...positionValues.map((p) => p.y), 0) + NODE_HEIGHT + 80
     : 0;
+  const contentWidth = maxX - minX;
+  const contentHeight = maxY - minY;
 
   const screensWithUrl = screens.filter((s) =>
     normalizePreviewUrl(previewUrl, getScreenPreviewPath(s)),
@@ -190,9 +221,11 @@ export function LiveFlowCanvas({
 
   useEffect(() => {
     if (!nodesLayerRef.current) return;
-    nodesLayerRef.current.style.setProperty("--nodes-layer-width", `${maxX}px`);
-    nodesLayerRef.current.style.setProperty("--nodes-layer-height", `${maxY}px`);
-  }, [maxX, maxY]);
+    nodesLayerRef.current.style.setProperty("--nodes-layer-width", `${contentWidth}px`);
+    nodesLayerRef.current.style.setProperty("--nodes-layer-height", `${contentHeight}px`);
+    nodesLayerRef.current.style.setProperty("--nodes-layer-offset-x", `${-minX}px`);
+    nodesLayerRef.current.style.setProperty("--nodes-layer-offset-y", `${-minY}px`);
+  }, [contentWidth, contentHeight, minX, minY]);
 
   useEffect(() => {
     if (!progressTrackRef.current) return;
@@ -247,6 +280,7 @@ export function LiveFlowCanvas({
   }, []);
 
   const handleEdgeClick = useCallback((edge: GraphEdge) => {
+    setSelectedEdgeKey(`${edge.fromId}-${edge.toId}`);
     setAnimatingEdge(edge);
     setDotPosition(null);
   }, []);
@@ -456,12 +490,17 @@ export function LiveFlowCanvas({
           </div>
 
           <FlowEdgesLayer
-            edges={navigateEdges}
+            edges={uiEdges}
             positions={positions}
-            maxX={maxX}
-            maxY={maxY}
+            minX={minX}
+            minY={minY}
+            contentWidth={contentWidth}
+            contentHeight={contentHeight}
             pathRefs={pathRefs}
             dotPosition={dotPosition}
+            domReports={domReportsByScreenId}
+            fallbackDomReport={fallbackDomReport}
+            selectedEdgeKey={selectedEdgeKey}
             onEdgeClick={handleEdgeClick}
           />
         </div>

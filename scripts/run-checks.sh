@@ -484,8 +484,8 @@ fi
 
 if [[ "$run_ai_review" = true ]] && { [[ "$run_frontend" = true ]] || [[ "$run_backend" = true ]]; }; then
   echo "Running AI code review..."
-  # Pre-push sets CHECK_MODE=diff (review only pushed changes); else default full (whole codebase per chunk).
-  export CHECK_MODE="${CHECK_MODE:-full}"
+  # Pre-push sets CHECK_MODE=diff (review only pushed changes); else default commit (only last commit — stable, fast). Full is for --until-95/--refactor only.
+  export CHECK_MODE="${CHECK_MODE:-commit}"
   [[ -n "$ai_review_chunk" ]] && export AI_REVIEW_CHUNK="$ai_review_chunk"
   run_required "AI review" bash "$ROOT_DIR/scripts/ai-code-review.sh"
 fi

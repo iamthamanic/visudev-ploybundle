@@ -1,6 +1,15 @@
 import type { MouseEvent } from "react";
 import clsx from "clsx";
-import { Calendar, Database, FolderGit2, Github, Globe, MoreVertical, Trash2 } from "lucide-react";
+import {
+  Calendar,
+  Database,
+  FolderGit2,
+  Github,
+  Globe,
+  MoreVertical,
+  Pin,
+  Trash2,
+} from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,9 +26,18 @@ interface ProjectCardProps {
   onDelete?: (id: string) => void;
   onClick?: (project: Project) => void;
   onEdit?: (project: Project) => void;
+  onPinToggle?: (projectId: string) => void;
+  isPinned?: boolean;
 }
 
-export function ProjectCard({ project, onDelete, onClick, onEdit }: ProjectCardProps) {
+export function ProjectCard({
+  project,
+  onDelete,
+  onClick,
+  onEdit,
+  onPinToggle,
+  isPinned,
+}: ProjectCardProps) {
   const { activeProject, setActiveProject } = useVisudev();
   const isActive = activeProject?.id === project.id;
 
@@ -49,6 +67,11 @@ export function ProjectCard({ project, onDelete, onClick, onEdit }: ProjectCardP
     onDelete?.(project.id);
   };
 
+  const handlePinToggle = (event: MouseEvent) => {
+    event.stopPropagation();
+    onPinToggle?.(project.id);
+  };
+
   return (
     <div
       className={clsx(styles.card, isActive && styles.cardActive)}
@@ -63,36 +86,48 @@ export function ProjectCard({ project, onDelete, onClick, onEdit }: ProjectCardP
         <div className={styles.iconBadge}>
           <FolderGit2 className={styles.icon} aria-hidden="true" />
         </div>
-        <DropdownMenu modal={false}>
-          <DropdownMenuTrigger asChild>
+        <div className={styles.headerActions}>
+          {onPinToggle && (
             <button
               type="button"
-              className={styles.dropdownButton}
-              aria-label="Projekt-Aktionen öffnen"
+              className={clsx(styles.pinButton, isPinned && styles.pinActive)}
+              onClick={handlePinToggle}
+              aria-label={isPinned ? "Projekt ablösen" : "Projekt anpinnen"}
             >
-              <MoreVertical aria-hidden="true" />
+              <Pin className={styles.pinIcon} />
             </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            align="end"
-            sideOffset={6}
-            collisionPadding={8}
-            className={styles.dropdownContent}
-          >
-            <DropdownMenuItem onClick={handleOpen}>Öffnen</DropdownMenuItem>
-            <DropdownMenuItem onClick={handleEdit}>Bearbeiten</DropdownMenuItem>
-            {isActive && <DropdownMenuItem onClick={handleUnselect}>Abwählen</DropdownMenuItem>}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              className={styles.dropdownDanger}
-              onClick={handleDelete}
-              aria-label="Projekt löschen"
+          )}
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className={styles.dropdownButton}
+                aria-label="Projekt-Aktionen öffnen"
+              >
+                <MoreVertical aria-hidden="true" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              sideOffset={6}
+              collisionPadding={8}
+              className={styles.dropdownContent}
             >
-              <Trash2 className={styles.menuIcon} aria-hidden="true" />
-              Projekt löschen
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+              <DropdownMenuItem onClick={handleOpen}>Öffnen</DropdownMenuItem>
+              <DropdownMenuItem onClick={handleEdit}>Bearbeiten</DropdownMenuItem>
+              {isActive && <DropdownMenuItem onClick={handleUnselect}>Abwählen</DropdownMenuItem>}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className={styles.dropdownDanger}
+                onClick={handleDelete}
+                aria-label="Projekt löschen"
+              >
+                <Trash2 className={styles.menuIcon} aria-hidden="true" />
+                Projekt löschen
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
 
       <h3 className={styles.title}>{project.name}</h3>

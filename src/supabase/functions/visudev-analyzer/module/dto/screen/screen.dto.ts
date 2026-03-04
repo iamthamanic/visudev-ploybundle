@@ -1,5 +1,27 @@
-export type ScreenType = "page" | "screen" | "view" | "cli-command";
+export type ScreenType =
+  | "page"
+  | "screen"
+  | "view"
+  | "cli-command"
+  | "modal"
+  | "tab"
+  | "dropdown";
 export type ScreenScreenshotStatus = "none" | "pending" | "ok" | "error";
+
+export interface EdgeTrigger {
+  label?: string;
+  selector?: string;
+  testId?: string;
+  file?: string;
+  line?: number;
+  confidence?: number;
+}
+
+export interface StateTarget {
+  targetScreenId: string;
+  edgeType: "open-modal" | "switch-tab" | "dropdown-action";
+  trigger?: EdgeTrigger;
+}
 
 export interface Screen {
   id: string;
@@ -17,6 +39,10 @@ export interface Screen {
   lastScreenshotCommit?: string;
   tableName?: string;
   description?: string;
+  parentScreenId?: string;
+  parentPath?: string;
+  stateKey?: string;
+  stateTargets?: StateTarget[];
 }
 
 export interface FileContent {

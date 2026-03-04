@@ -315,7 +315,7 @@ export function SettingsPage({ project }: SettingsPageProps) {
               )}
             </div>
             <Dialog open={showDisconnectModal} onOpenChange={setShowDisconnectModal}>
-              <DialogContent>
+              <DialogContent data-visudev-modal="github-disconnect">
                 <DialogHeader>
                   <DialogTitle>GitHub trennen?</DialogTitle>
                   <DialogDescription>

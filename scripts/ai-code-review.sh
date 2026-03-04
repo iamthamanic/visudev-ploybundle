@@ -33,7 +33,7 @@ else
 fi
 
 # CHECK_MODE: "commit" = nur letzter Commit (Default bei run-checks); "full" = ganze Codebase; "diff" = Änderungen (staged/unstaged/range)
-CHECK_MODE="${CHECK_MODE:-full}"
+CHECK_MODE="${CHECK_MODE:-commit}"
 # AI_REVIEW_CHUNK: bei CHECK_MODE=full nur diesen Chunk prüfen (src | supabase | scripts). Schnellere Iteration auf 95%.
 AI_REVIEW_CHUNK="${AI_REVIEW_CHUNK:-}"
 

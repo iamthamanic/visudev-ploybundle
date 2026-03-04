@@ -30,9 +30,11 @@ Die Web-App kann auf dem Rechner **keine Prozesse starten** (Browser-Sicherheit)
 
 ## Preview Runner einrichten
 
-Der Preview Runner ist ein **eigener Service** (läuft nicht in Supabase). Im Repo liegt eine **MVP-Stub-Version** unter `preview-runner/`.
+Der Preview Runner ist ein **eigener Service** (läuft nicht in Supabase). Im Repo liegt der Runner unter `preview-runner/`.
 
-### Lokal starten (Stub)
+### Lokal starten
+
+**Standard: echter Build** (Repo klonen, bauen, App starten). Einfach starten:
 
 ```bash
 cd preview-runner
@@ -40,7 +42,9 @@ npm install
 npm start
 ```
 
-Der Stub antwortet auf:
+Oder aus dem Projektroot: `npm run dev` (startet VisuDEV + Runner mit echtem Build) bzw. `npm run dev:runner` (nur Runner).
+
+Der Runner antwortet auf:
 
 - `POST /start` – Body: `{ repo, branchOrCommit, projectId }` → weist einen **freien Port** aus dem Pool zu, speichert `previewUrl: http://localhost:PORT` (oder optional `PREVIEW_BASE_URL` + Query), antwortet mit `{ runId, status: "starting" }`
 - `GET /status/:runId` – nach ein paar Sekunden: `{ status: "ready", previewUrl }` (z. B. `http://localhost:4001`)
@@ -51,7 +55,7 @@ Der Stub antwortet auf:
 Umgebungsvariablen:
 
 - `PORT` – Server-Port des Runners (Standard: 4000)
-- `USE_REAL_BUILD` – **optional**. Wenn `1` oder `true`: echter Clone/Build/Start (Repo klonen, bauen, App auf zugewiesenem Port starten). Ohne: Stub (Platzhalter-Seite).
+- **Standard: echter Build.** Stub nur explizit: `USE_STUB=1` oder `USE_REAL_BUILD=0` – dann keine Clone/Build/Start, nur Platzhalter-Seite (z. B. für API-Tests oder CI).
 - `USE_DOCKER` – **optional**. Wenn `1` oder `true`: Build und Serve laufen **im Docker-Container** (fipso/runner-ähnlich). Ein Container pro Preview: `install → build → npx serve dist -s -l 3000` im Container; Host-Port wird auf Container:3000 gemappt. **Vorteil:** Kein „App ignoriert PORT“ (ECONNREFUSED); funktioniert auch bei Vite/React-Apps, die sonst auf 5173 laufen. **Voraussetzung:** Docker muss laufen (`docker info`). Image: `node:20-alpine` (über `VISUDEV_DOCKER_IMAGE` änderbar).
 - `PREVIEW_DOCKER_READY_TIMEOUT_MS` – **optional** (nur Docker-Modus). Timeout bis die App im Container auf dem gemappten Port antwortet (Standard: `300000` = 300s).
 - `PREVIEW_DOCKER_LOG_TAIL` – **optional** (nur Docker-Modus). Anzahl Log-Zeilen, die bei Docker-Boot-Fehlern ins Preview-Terminal geschrieben werden (Standard: `120`).
@@ -65,7 +69,7 @@ Umgebungsvariablen:
 - `GITHUB_WEBHOOK_SECRET` – **optional**. Secret, das du in den GitHub-Webhook-Einstellungen einträgst; der Runner prüft damit die Signatur (X-Hub-Signature-256) und lehnt unbefugte Aufrufe ab.
 - `PREVIEW_PORT_MIN` / `PREVIEW_PORT_MAX` – Port-Pool für Preview-URLs (Standard: 4001–4099). Pro Lauf wird automatisch ein freier Port vergeben.
 - `PREVIEW_BASE_URL` – **optional**. Wenn gesetzt (z. B. Tunnel-URL), wird diese Basis + Query als `previewUrl` genutzt; sonst immer `http://localhost:${port}`.
-- `SIMULATE_DELAY_MS` – Verzögerung in ms, bis „ready“ (nur im Stub-Modus; Standard: 3000)
+- `SIMULATE_DELAY_MS` – Verzögerung in ms, bis „ready“ (nur bei `USE_STUB=1`; Standard: 3000)
 - `AUTO_REFRESH_INTERVAL_MS` – **optional**. Im REAL-Modus prüft der Runner alle N ms, ob das Repo neue Commits hat; bei Bedarf automatisch pull + rebuild + restart (Standard: 60000 = 1 Minute). Auf 0 setzen deaktiviert Auto-Refresh.
 
 **Unterstützte Paketmanager:** Der Runner erkennt den Paketmanager anhand der Lock-Dateien und führt Install/Build mit dem passenden Befehl aus:
@@ -93,7 +97,7 @@ Du musst **keinen** freien Port als Secret eintragen. Du trägst nur **eine** UR
 VITE_PREVIEW_RUNNER_URL=http://localhost:4000
 ```
 
-Dann starte den Runner (`cd preview-runner && npm start`). Das Frontend spricht den Runner direkt an – **kein Supabase-Secret nötig**. Der Runner läuft auf Port 4000 (API); die einzelnen Previews bekommen automatisch freie Ports (4001–4099).
+Dann starte den Runner (`cd preview-runner && npm start` oder aus dem Root `npm run dev`). Das Frontend spricht den Runner direkt an – **kein Supabase-Secret nötig**. Der Runner läuft auf Port 4000 (API) und baut Previews standardmäßig echt; die einzelnen Previews bekommen automatisch freie Ports (4001–4099).
 
 ### Supabase: Runner-URL eintragen (Produktion / mit Edge Function)
 
@@ -148,8 +152,8 @@ Der Test legt ein minimales Workspace mit `package.json` an, führt `npm ci --ig
 
 1. Runner im Terminal mit **Ctrl+C** beenden.
 2. Erneut starten:
-   - Stub: `npm start`
-   - Echter Build: `USE_REAL_BUILD=1 npm start` (optional mit `GITHUB_TOKEN=…`).
+   - Standard (echter Build): `npm start` (optional mit `GITHUB_TOKEN=…`).
+   - Nur für API-Tests/CI Stub: `USE_STUB=1 npm start`.
 
 Ohne Neustart läuft weiterhin die alte Version.
 
@@ -175,7 +179,7 @@ Wenn jemand ins Repo pusht (z. B. Button blau → grün), kann die Preview **a
    - **Content type:** `application/json`
    - **Secret:** Beliebiges geheimes Passwort (z. B. mit `openssl rand -hex 32` erzeugen). Dasselbe Secret als `GITHUB_WEBHOOK_SECRET` im Runner setzen (Env oder `.env` im `preview-runner`-Ordner).
    - **Events:** „Just the push event“ reicht.
-3. **Runner mit Secret starten:** `GITHUB_WEBHOOK_SECRET=dein-secret USE_REAL_BUILD=1 npm start`
+3. **Runner mit Secret starten:** `GITHUB_WEBHOOK_SECRET=dein-secret npm start` (Standard ist echter Build).
 4. **Ablauf:** Push ins Repo → GitHub ruft deine Webhook-URL auf → Runner findet die laufende Preview für dieses Repo+Branch → führt `git pull`, Rebuild und Neustart aus → die Preview zeigt den neuesten Stand.
 
 Ohne Webhook: **„Preview aktualisieren“** in VisuDEV klicken erzeugt denselben Effekt (Pull + Rebuild + Restart).
@@ -185,18 +189,18 @@ Ohne Webhook: **„Preview aktualisieren“** in VisuDEV klicken erzeugt denselb
 1. Projekt mit GitHub-Repo auswählen.
 2. App Flow öffnen (Live-Preview-Iframes oder Einzel-iframe). **Pro Screen:** Jede Karte lädt die Route in einem eigenen Iframe. Kann ein Screen nicht geladen werden (Timeout, Fehler, keine URL), wird nur diese Karte mit einem **klar benannten Grund** angezeigt (z. B. „Timeout: Screen konnte nicht innerhalb von 12 s geladen werden …“); die übrigen Screens bleiben unberührt und werden weiter angezeigt.
 3. **Preview starten** (oder Auto-Start bei verbundenem Repo) → VisuDEV ruft entweder den Runner **direkt** (wenn `VITE_PREVIEW_RUNNER_URL` gesetzt) oder die Edge Function auf; der Runner vergibt einen freien Port und liefert die Preview-URL.
-4. Nach einigen Sekunden (Stub) bzw. Minuten (echter Build) erscheint die **Preview-URL** im iframe.
+4. Nach einigen Sekunden (bei USE_STUB=1) bzw. Minuten (echter Build, Standard) erscheint die **Preview-URL** im iframe.
 5. **Live:** Nach Push ins Repo wird die Preview automatisch aktualisiert (wenn Webhook konfiguriert), sonst **„Preview aktualisieren“** klicken.
 6. Optional: **Preview beenden** zum Stoppen (Port wird im Runner wieder freigegeben).
 7. Optional: **Live Route/Buttons** anzeigen – wenn deine App im iframe `postMessage` mit Typ `visudev-dom-report` sendet, zeigt VisuDEV z. B. „Live: /dashboard · 3 Buttons“ am Preview-Knoten. Snippet und Doku: [LIVE_DOM_REPORT.md](./LIVE_DOM_REPORT.md).
 
 ## Iframe-Einbetten (Frame-Proxy)
 
-Der Preview Runner startet im **echten Build** (USE_REAL_BUILD=1) einen **Frame-Proxy**: Die Preview-App läuft auf einem internen Port (z. B. 4004), der **Proxy** läuft auf dem Port, den VisuDEV als Preview-URL nutzt (z. B. 4003). Der Proxy leitet alle Anfragen an die App weiter und setzt die Header **Content-Security-Policy: frame-ancestors …** so, dass VisuDEV (localhost:5173, 3000) die Preview in Iframes einbetten kann. **Du musst in der Preview-App (hrkoordinator o. Ä.) nichts anpassen** – der Runner übernimmt das.
+Der Preview Runner startet im **echten Build** (Standard) einen **Frame-Proxy**: Die Preview-App läuft auf einem internen Port (z. B. 4004), der **Proxy** läuft auf dem Port, den VisuDEV als Preview-URL nutzt (z. B. 4003). Der Proxy leitet alle Anfragen an die App weiter und setzt die Header **Content-Security-Policy: frame-ancestors …** so, dass VisuDEV (localhost:5173, 3000) die Preview in Iframes einbetten kann. **Du musst in der Preview-App (hrkoordinator o. Ä.) nichts anpassen** – der Runner übernimmt das.
 
 ## Wenn alle Screens mit Timeout fehlschlagen (ohne Frame-Proxy)
 
-Falls du den Runner **ohne** USE_REAL_BUILD nutzt (Stub) oder der Proxy ausfällt, kann die Preview-App das Einbetten blockieren. Dann in der **Preview-App** (das Repo, das auf z. B. `http://localhost:4003` läuft) Einbetten erlauben:
+Falls du den Runner mit **USE_STUB=1** nutzt oder der Proxy ausfällt, kann die Preview-App das Einbetten blockieren. Dann in der **Preview-App** (das Repo, das auf z. B. `http://localhost:4003` läuft) Einbetten erlauben:
 
 - **X-Frame-Options:** Nicht setzen oder nicht `DENY`/`SAMEORIGIN` (bzw. erlauben, dass VisuDEV (z. B. `http://localhost:5173`) einbetten darf).
 - **CSP (Content-Security-Policy):** `frame-ancestors` so setzen, dass die VisuDEV-Origin erlaubt ist.

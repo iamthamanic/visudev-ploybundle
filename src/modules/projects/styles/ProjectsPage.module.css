@@ -73,6 +73,22 @@
   padding: 1.5rem;
 }
 
+.contentList {
+  padding-top: 1rem;
+}
+
+.listContainer {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.listContainerGrid {
+  max-width: 72rem;
+  margin-left: auto;
+  margin-right: auto;
+}
+
 .list {
   display: flex;
   flex-direction: column;
@@ -99,6 +115,12 @@
 @media (min-width: 1024px) {
   .grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1280px) {
+  .grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 

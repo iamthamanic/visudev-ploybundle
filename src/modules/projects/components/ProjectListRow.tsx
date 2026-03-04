@@ -5,7 +5,7 @@
 
 import type { MouseEvent } from "react";
 import clsx from "clsx";
-import { Calendar, FolderGit2, Github, MoreVertical, Trash2 } from "lucide-react";
+import { Calendar, FolderGit2, Github, MoreVertical, Pin, Trash2 } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -22,9 +22,21 @@ interface ProjectListRowProps {
   onDelete?: (id: string) => void;
   onClick?: (project: Project) => void;
   onEdit?: (project: Project) => void;
+  onPinToggle?: (projectId: string) => void;
+  isPinned?: boolean;
+  /** When true, row is inside table (no card border/radius, only bottom border). */
+  isTableRow?: boolean;
 }
 
-export function ProjectListRow({ project, onDelete, onClick, onEdit }: ProjectListRowProps) {
+export function ProjectListRow({
+  project,
+  onDelete,
+  onClick,
+  onEdit,
+  onPinToggle,
+  isPinned = false,
+  isTableRow = false,
+}: ProjectListRowProps) {
   const { activeProject, setActiveProject } = useVisudev();
   const isActive = activeProject?.id === project.id;
 
@@ -54,9 +66,14 @@ export function ProjectListRow({ project, onDelete, onClick, onEdit }: ProjectLi
     onDelete?.(project.id);
   };
 
+  const handlePinToggle = (event: MouseEvent) => {
+    event.stopPropagation();
+    onPinToggle?.(project.id);
+  };
+
   return (
     <div
-      className={clsx(styles.row, isActive && styles.rowActive)}
+      className={clsx(styles.row, isActive && styles.rowActive, isTableRow && styles.rowInTable)}
       onClick={() => onClick?.(project)}
     >
       <div className={styles.iconCell}>
@@ -72,9 +89,15 @@ export function ProjectListRow({ project, onDelete, onClick, onEdit }: ProjectLi
             <span className={styles.repoText} title={project.github_repo}>
               {project.github_repo}
             </span>
-            {project.github_branch && (
-              <span className={styles.branch}>{project.github_branch}</span>
-            )}
+          </span>
+        ) : (
+          <span className={styles.muted}>—</span>
+        )}
+      </div>
+      <div className={styles.branchCell}>
+        {project.github_branch ? (
+          <span className={styles.branch} title={project.github_branch}>
+            {project.github_branch}
           </span>
         ) : (
           <span className={styles.muted}>—</span>
@@ -83,6 +106,26 @@ export function ProjectListRow({ project, onDelete, onClick, onEdit }: ProjectLi
       <div className={styles.dateCell}>
         <Calendar className={styles.dateIcon} aria-hidden="true" />
         <span>{formattedDate}</span>
+      </div>
+      <div
+        className={styles.pinCell}
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        {onPinToggle && (
+          <button
+            type="button"
+            className={clsx(styles.menuButton, isPinned && styles.pinActive)}
+            onClick={handlePinToggle}
+            aria-label={
+              isPinned ? "Projekt oben anheften (Anpinnen aufheben)" : "Projekt oben anheften"
+            }
+            title={isPinned ? "Anpinnen aufheben" : "Oben anheften"}
+          >
+            <Pin className={styles.pinIcon} aria-hidden="true" />
+          </button>
+        )}
       </div>
       <div
         className={styles.actionsCell}

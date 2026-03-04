@@ -23,7 +23,7 @@ export function RunnerStatusDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={styles.dialogContent}>
+      <DialogContent className={styles.dialogContent} data-visudev-modal="runner-status">
         <DialogHeader>
           <DialogTitle>VisuDEV Runner</DialogTitle>
         </DialogHeader>

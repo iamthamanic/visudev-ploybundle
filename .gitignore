@@ -34,3 +34,4 @@ test-results/
 # IDE / OS
 .DS_Store
 *.log
+.cursor/

@@ -9,6 +9,15 @@ import type {
 } from "../../dto/index.ts";
 import { RepositoryException } from "../exceptions/index.ts";
 
+/** Minimal type for KV integrations payload (Supabase connection for schema sync). */
+export interface IntegrationsKV {
+  supabase?: {
+    url?: string;
+    serviceKey?: string;
+    projectRef?: string;
+  };
+}
+
 export class DataRepository extends BaseService {
   public async getSchema(projectId: string): Promise<SchemaResponseDto> {
     const key = this.getKey(projectId, "schema");
@@ -51,6 +60,14 @@ export class DataRepository extends BaseService {
     const key = this.getKey(projectId, "erd");
     const stored = await this.getValue<ErdResponseDto>(key);
     return stored ?? {};
+  }
+
+  /** Read integrations for project (key integrations:{projectId}) to get project's Supabase connection. */
+  public async getIntegrations(
+    projectId: string,
+  ): Promise<IntegrationsKV | null> {
+    const key = `integrations:${projectId}`;
+    return await this.getValue<IntegrationsKV>(key);
   }
 
   public async updateErd(

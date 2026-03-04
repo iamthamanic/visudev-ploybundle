@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, lazy, Suspense } from "react";
 import { Loader2 } from "lucide-react";
 import { useAuth } from "../../../contexts/useAuth";
 import { useVisudev } from "../../../lib/visudev/store";
-import { Sidebar } from "../components/Sidebar";
+import { Sidebar, type NavItemRect } from "../components/Sidebar";
 import type { ShellScreen } from "../types";
 import styles from "../styles/ShellPage.module.css";
 
@@ -78,6 +78,7 @@ const SettingsPage = lazy(() =>
 
 export function ShellPage() {
   const [activeScreen, setActiveScreen] = useState<ShellScreen>(getScreenFromUrl);
+  const [navItemsFromSidebar, setNavItemsFromSidebar] = useState<NavItemRect[]>([]);
   const { activeProject, setPreviewAccessToken } = useVisudev();
   const { session } = useAuth();
 
@@ -106,6 +107,17 @@ export function ShellPage() {
     setActiveScreen(getScreenFromUrl());
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined" || window === window.top) return;
+    const route = screenToPath(activeScreen);
+    const navItems = navItemsFromSidebar.map(({ path, label, rect }) => ({
+      path,
+      label,
+      rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+    }));
+    window.parent.postMessage({ type: "visudev-dom-report", route, navItems }, "*");
+  }, [activeScreen, navItemsFromSidebar]);
+
   const handleNavigate = useCallback((screen: ShellScreen) => {
     const path = screenToPath(screen);
     const inIframe = typeof window !== "undefined" && window !== window.top;
@@ -131,6 +143,11 @@ export function ShellPage() {
         activeScreen={activeScreen}
         onNavigate={handleNavigate}
         onNewProject={handleNewProject}
+        onDomReport={
+          typeof window !== "undefined" && window !== window.top
+            ? setNavItemsFromSidebar
+            : undefined
+        }
       />
 
       <main className={styles.main}>

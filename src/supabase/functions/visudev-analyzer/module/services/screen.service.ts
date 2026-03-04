@@ -78,6 +78,8 @@ export class ScreenService extends BaseService {
       }));
     }
 
+    this.extractor.extractPageLikeScreens(screens, files);
+    this.extractor.extractModalsTabsAndDropdowns(screens, files);
     this.logger.info("Screens extracted", { count: screens.length });
     return { screens, framework };
   }

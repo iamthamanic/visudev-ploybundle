@@ -18,7 +18,7 @@ Starts the runner on port 4000 (override with `PORT=4001 npx visudev-runner`).
 ## Env (optional)
 
 - `PORT` – API port (default 4000)
-- `USE_REAL_BUILD=1` – clone, build and run the app (default stub)
+- **Default: real build** (clone, build, run). Stub only with `USE_STUB=1` or `USE_REAL_BUILD=0`.
 - `USE_LOCAL_WORKSPACE` – absolute path (or path relative to cwd) to use as workspace instead of cloning; skips Git clone/pull so the preview runs your current local code (handy for AppFlow so each iframe card shows the correct tab)
 - `USE_DOCKER=1` – run each preview in a container
 - `PREVIEW_CLEAN_BEFORE_BUILD=0` – disable cleaning of `dist`, `.next`, `out`, `.vite`, `node_modules/.cache` before each Docker build (default: clean enabled to avoid stale artifacts)

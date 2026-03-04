@@ -21,7 +21,7 @@ interface EnvConfig {
   kvTableName: string;
 }
 
-const app = new Hono();
+const app = new Hono().basePath("/visudev-data");
 
 app.use(
   "/*",

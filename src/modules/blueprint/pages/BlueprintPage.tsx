@@ -143,6 +143,18 @@ export function BlueprintPage({ projectId }: BlueprintPageProps) {
             </button>
           </div>
         </div>
+
+        {isScanning && (
+          <div className={`${styles.statusBar} ${styles.statusInfo}`} role="status">
+            <Loader2 className={`${styles.inlineIcon} ${styles.spinner}`} aria-hidden="true" />
+            <div>
+              <p className={styles.statusTitle}>Blueprint wird analysiert...</p>
+              <p className={styles.statusMeta}>
+                Repo: {activeProject?.github_repo ?? "—"} @ {activeProject?.github_branch ?? "main"}
+              </p>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className={styles.content}>

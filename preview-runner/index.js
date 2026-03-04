@@ -3,7 +3,7 @@
  * VisuDEV Preview Runner
  *
  * API: POST /start, GET /status/:runId, POST /stop/:runId, POST /stop-project/:projectId, POST /refresh, POST /webhook/github
- * Real mode (USE_REAL_BUILD=1): clone repo, build, start app on assigned port.
+ * Default: real build (clone, build, start app). Stub only with USE_STUB=1 or USE_REAL_BUILD=0.
  * Refresh: git pull + rebuild + restart so preview shows latest from repo (live).
  * GitHub Webhook: on push, auto-refresh matching preview (pull + rebuild + restart).
  */
@@ -51,10 +51,16 @@ const PREVIEW_BASE_URL = process.env.PREVIEW_BASE_URL || "";
 const PREVIEW_PUBLIC_ORIGIN = process.env.PREVIEW_PUBLIC_ORIGIN || "";
 const PREVIEW_BIND_HOST = process.env.PREVIEW_BIND_HOST || "127.0.0.1";
 const SIMULATE_DELAY_MS = Number(process.env.SIMULATE_DELAY_MS) || 3000;
-const USE_REAL_BUILD =
-  process.env.USE_REAL_BUILD === "1" ||
-  process.env.USE_REAL_BUILD === "true" ||
-  process.env.USE_REAL_BUILD === "yes";
+/** Stub explicitly requested (no clone/build/start, placeholder page only). */
+const USE_STUB =
+  process.env.USE_STUB === "1" ||
+  process.env.USE_STUB === "true" ||
+  process.env.USE_STUB === "yes" ||
+  process.env.USE_REAL_BUILD === "0" ||
+  process.env.USE_REAL_BUILD === "false" ||
+  process.env.USE_REAL_BUILD === "no";
+/** Real build is default; only disabled when USE_STUB or USE_REAL_BUILD=0. */
+const USE_REAL_BUILD = !USE_STUB;
 const USE_DOCKER =
   process.env.USE_DOCKER === "1" ||
   process.env.USE_DOCKER === "true" ||
@@ -607,7 +613,7 @@ function createFrameProxy(proxyPort, appPort) {
 function startPlaceholderServer(port, errorMessage = null) {
   const html = errorMessage
     ? `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Preview Fehler</title></head><body style="font-family:sans-serif;padding:2rem;background:#1a1a2e;color:#eee;"><h1>Preview Fehler</h1><pre style="white-space:pre-wrap;color:#f88;">${escapeHtml(errorMessage)}</pre></body></html>`
-    : `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Preview Stub</title></head><body style="font-family:sans-serif;padding:2rem;background:#1a1a2e;color:#eee;max-width:36rem;"><h1>Preview (Stub)</h1><p>Port ${port} – hier würde die gebaute App laufen.</p><p>Der Runner startet aktuell <strong>keine</strong> echte App. Für echte Previews:</p><ol style="margin:0.5rem 0;padding-left:1.5rem;"><li>Runner stoppen (Ctrl+C)</li><li>Starten mit echtem Build:<br><code style="background:#333;padding:0.25rem 0.5rem;border-radius:4px;">USE_REAL_BUILD=1 npm start</code></li><li>Optional: <code style="background:#333;padding:0.1rem 0.3rem;">GITHUB_TOKEN</code> setzen (für private Repos)</li></ol><p style="color:#9ca3af;font-size:0.9rem;">Siehe <code>docs/PREVIEW_RUNNER.md</code>.</p></body></html>`;
+    : `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Preview Stub</title></head><body style="font-family:sans-serif;padding:2rem;background:#1a1a2e;color:#eee;max-width:36rem;"><h1>Preview (Stub)</h1><p>Port ${port} – Stub-Modus: Es läuft keine gebaute App.</p><p>Der Runner wurde mit <code>USE_STUB=1</code> oder <code>USE_REAL_BUILD=0</code> gestartet. Für echte Previews: Runner neu starten <strong>ohne</strong> diese Umgebungsvariablen (Standard ist dann echter Build).</p><p style="color:#9ca3af;font-size:0.9rem;">Siehe <code>docs/PREVIEW_RUNNER.md</code>.</p></body></html>`;
   const server = http.createServer((req, res) => {
     res.writeHead(200, {
       "Content-Type": "text/html; charset=utf-8",
@@ -2489,8 +2495,10 @@ findFreeRunnerPort().then((actualPort) => {
       );
       console.log(`  PREVIEW_DOCKER_LOG_TAIL=${PREVIEW_DOCKER_LOG_TAIL}`);
     }
-    if (!USE_REAL_BUILD && !USE_DOCKER) {
-      console.log(`  SIMULATE_DELAY_MS=${SIMULATE_DELAY_MS}`);
+    if (USE_STUB) {
+      console.log(
+        `  Stub-Modus (USE_STUB=1 oder USE_REAL_BUILD=0). SIMULATE_DELAY_MS=${SIMULATE_DELAY_MS}`,
+      );
     }
     if (GITHUB_WEBHOOK_SECRET) {
       console.log(`  GitHub Webhook: POST /webhook/github (Signature verified)`);

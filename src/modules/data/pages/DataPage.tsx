@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AlertCircle, Loader2, RefreshCw, X } from "lucide-react";
 import clsx from "clsx";
 import { useVisudev } from "../../../lib/visudev/store";
+import { api } from "../../../utils/api";
 import { useERD } from "../../../utils/useVisuDev";
 import type { ERDTableNode } from "../types";
 import styles from "../styles/DataPage.module.css";
@@ -33,11 +34,12 @@ export function DataPage({ projectId }: DataPageProps) {
     setIsRescan(true);
     try {
       await startScan("data");
+      await api.data.syncERD(projectId);
       await refreshERD();
     } finally {
       setIsRescan(false);
     }
-  }, [startScan, refreshERD]);
+  }, [projectId, startScan, refreshERD]);
 
   useEffect(() => {
     if (activeProject && scanStatuses.data.status === "idle") {
@@ -89,6 +91,18 @@ export function DataPage({ projectId }: DataPageProps) {
             )}
           </button>
         </div>
+
+        {isScanning && (
+          <div className={`${styles.statusBar} ${styles.statusInfo}`} role="status">
+            <Loader2 className={clsx(styles.inlineIcon, styles.spinner)} aria-hidden="true" />
+            <div>
+              <p className={styles.statusTitle}>Schema wird analysiert...</p>
+              <p className={styles.statusMeta}>
+                Repo: {activeProject?.github_repo ?? "—"} @ {activeProject?.github_branch ?? "main"}
+              </p>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className={styles.content}>

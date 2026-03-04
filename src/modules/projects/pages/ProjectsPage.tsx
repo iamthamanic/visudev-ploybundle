@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import clsx from "clsx";
 import { FolderGit2, LayoutGrid, List, Loader2, Plus, Search } from "lucide-react";
 import { toast } from "sonner";
@@ -25,8 +25,9 @@ import { useVisudev } from "../../../lib/visudev/store";
 import type { PreviewMode, Project } from "../../../lib/visudev/types";
 import { api } from "../../../utils/api";
 import { ProjectCard } from "../components/ProjectCard";
-import { ProjectListRow } from "../components/ProjectListRow";
+import { ProjectListWithDnD, type ListSortColumn } from "../components/ProjectListWithDnD";
 import { GitHubRepoSelector } from "../components/GitHubRepoSelector";
+import { useProjectOrder, sortProjectsByOrder } from "../hooks/useProjectOrder";
 import { SupabaseProjectSelector } from "../components/SupabaseProjectSelector";
 import styles from "../styles/ProjectsPage.module.css";
 
@@ -61,6 +62,20 @@ export function ProjectsPage({ onProjectSelect, onNewProject, onOpenSettings }: 
   const [isLoading, setIsLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [viewMode, setViewMode] = useState<"list" | "grid">("list");
+  const [listSortBy, setListSortBy] = useState<ListSortColumn | null>(null);
+  const [listSortDir, setListSortDir] = useState<"asc" | "desc">("asc");
+  const { order, pinned, togglePinned, moveProject } = useProjectOrder();
+
+  const handleListSort = useCallback((column: ListSortColumn) => {
+    setListSortBy((prev) => {
+      if (prev === column) {
+        setListSortDir((d) => (d === "asc" ? "desc" : "asc"));
+        return prev;
+      }
+      setListSortDir("asc");
+      return column;
+    });
+  }, []);
 
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
   const [deleteConfirmProjectId, setDeleteConfirmProjectId] = useState<string | null>(null);
@@ -256,6 +271,36 @@ export function ProjectsPage({ onProjectSelect, onNewProject, onOpenSettings }: 
     return nameMatch || repoMatch;
   });
 
+  const sortedProjects = useMemo(() => {
+    const byOrder = sortProjectsByOrder(filteredProjects, order, pinned);
+    if (!listSortBy) return byOrder;
+    const pinnedSet = new Set(pinned);
+    const getVal = (p: Project): string | number => {
+      switch (listSortBy) {
+        case "name":
+          return (p.name ?? "").toLowerCase();
+        case "repo":
+          return (p.github_repo ?? "").toLowerCase();
+        case "branch":
+          return (p.github_branch ?? "").toLowerCase();
+        case "createdAt":
+          return new Date(p.createdAt).getTime();
+        default:
+          return 0;
+      }
+    };
+    return [...byOrder].sort((a, b) => {
+      const aPinned = pinnedSet.has(a.id) ? 0 : 1;
+      const bPinned = pinnedSet.has(b.id) ? 0 : 1;
+      if (aPinned !== bPinned) return aPinned - bPinned;
+      const va = getVal(a);
+      const vb = getVal(b);
+      if (va < vb) return listSortDir === "asc" ? -1 : 1;
+      if (va > vb) return listSortDir === "asc" ? 1 : -1;
+      return 0;
+    });
+  }, [filteredProjects, order, pinned, listSortBy, listSortDir]);
+
   return (
     <div className={styles.root}>
       <div className={styles.header}>
@@ -314,38 +359,57 @@ export function ProjectsPage({ onProjectSelect, onNewProject, onOpenSettings }: 
         </div>
       </div>
 
-      <div className={styles.content}>
+      <div className={clsx(styles.content, viewMode === "list" && styles.contentList)}>
         {viewMode === "list" ? (
-          <div className={styles.list}>
-            {projectsLoading
-              ? Array.from({ length: 6 }).map((_, i) => (
+          projectsLoading ? (
+            <div className={styles.listContainer}>
+              <div className={styles.list}>
+                {Array.from({ length: 6 }).map((_, i) => (
                   <Skeleton key={`skeleton-${i}`} className={styles.skeletonRow} />
-                ))
-              : filteredProjects.map((project) => (
-                  <ProjectListRow
-                    key={project.id}
-                    project={project}
-                    onClick={() => handleProjectClick(project)}
-                    onEdit={() => handleEditClick(project)}
-                    onDelete={() => handleDeleteClick(project.id)}
-                  />
                 ))}
-          </div>
+              </div>
+            </div>
+          ) : (
+            <div className={styles.listContainer}>
+              <ProjectListWithDnD
+                projects={sortedProjects}
+                onProjectClick={handleProjectClick}
+                onEdit={handleEditClick}
+                onDelete={handleDeleteClick}
+                onPinToggle={togglePinned}
+                pinnedIds={pinned}
+                onMove={(projectId, toIndex) =>
+                  moveProject(
+                    projectId,
+                    toIndex,
+                    sortedProjects.map((p) => p.id),
+                  )
+                }
+                sortBy={listSortBy}
+                sortDir={listSortDir}
+                onSort={handleListSort}
+              />
+            </div>
+          )
         ) : (
-          <div className={styles.grid}>
-            {projectsLoading
-              ? Array.from({ length: 6 }).map((_, i) => (
-                  <Skeleton key={`skeleton-${i}`} className={styles.skeletonCard} />
-                ))
-              : filteredProjects.map((project) => (
-                  <ProjectCard
-                    key={project.id}
-                    project={project}
-                    onClick={() => handleProjectClick(project)}
-                    onEdit={() => handleEditClick(project)}
-                    onDelete={() => handleDeleteClick(project.id)}
-                  />
-                ))}
+          <div className={clsx(styles.listContainer, styles.listContainerGrid)}>
+            <div className={styles.grid}>
+              {projectsLoading
+                ? Array.from({ length: 6 }).map((_, i) => (
+                    <Skeleton key={`skeleton-${i}`} className={styles.skeletonCard} />
+                  ))
+                : sortedProjects.map((project) => (
+                    <ProjectCard
+                      key={project.id}
+                      project={project}
+                      onClick={() => handleProjectClick(project)}
+                      onEdit={() => handleEditClick(project)}
+                      onDelete={() => handleDeleteClick(project.id)}
+                      onPinToggle={togglePinned}
+                      isPinned={pinned.includes(project.id)}
+                    />
+                  ))}
+            </div>
           </div>
         )}
 
@@ -377,7 +441,7 @@ export function ProjectsPage({ onProjectSelect, onNewProject, onOpenSettings }: 
       </div>
 
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent className={styles.dialogContent}>
+        <DialogContent className={styles.dialogContent} data-visudev-modal="new-project">
           <DialogHeader>
             <DialogTitle>Neues Projekt erstellen</DialogTitle>
             <DialogDescription>
@@ -615,7 +679,7 @@ export function ProjectsPage({ onProjectSelect, onNewProject, onOpenSettings }: 
       </Dialog>
 
       <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-        <DialogContent className={styles.dialogContent}>
+        <DialogContent className={styles.dialogContent} data-visudev-modal="edit-project">
           <DialogHeader>
             <DialogTitle>Projekt bearbeiten</DialogTitle>
             <DialogDescription>Projektdaten und Verknüpfungen anpassen.</DialogDescription>
@@ -781,7 +845,7 @@ export function ProjectsPage({ onProjectSelect, onNewProject, onOpenSettings }: 
         open={isDeleteConfirmOpen}
         onOpenChange={(open) => !open && handleDeleteConfirmClose()}
       >
-        <DialogContent className={styles.dialogContent}>
+        <DialogContent className={styles.dialogContent} data-visudev-modal="delete-project">
           <DialogHeader>
             <DialogTitle>Projekt löschen</DialogTitle>
             <DialogDescription>

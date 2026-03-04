@@ -651,7 +651,8 @@ export function AppFlowPage({ projectId, githubRepo, githubBranch }: AppFlowPage
             <LiveFlowCanvas
               screens={activeProject.screens}
               flows={activeProject.flows}
-              previewUrl={liveFlowBaseUrl ?? ""}
+              previewUrl={typeof liveFlowBaseUrl === "string" ? liveFlowBaseUrl : ""}
+              isLivePreviewActive={previewReady === true}
               previewRunId={preview.projectId === projectId ? preview.runId : null}
               analysisLogs={analysisLogs}
               projectId={projectId}

@@ -2,6 +2,7 @@ import {
   Fragment,
   useCallback,
   useEffect,
+  useRef,
   useState,
   type ComponentType,
   type SVGProps,
@@ -29,10 +30,19 @@ import logoImage from "../../../assets/visudev-logo.png";
 import type { ShellScreen } from "../types";
 import styles from "../styles/Sidebar.module.css";
 
+/** Nav item rect + path for visudev-dom-report (App Flow edge start position). */
+export interface NavItemRect {
+  path: string;
+  label: string;
+  rect: { x: number; y: number; width: number; height: number };
+}
+
 interface SidebarProps {
   activeScreen: ShellScreen;
   onNavigate: (screen: ShellScreen) => void;
   onNewProject: () => void;
+  /** When in iframe: report nav item rects for exact App Flow edge start positions. */
+  onDomReport?: (navItems: NavItemRect[]) => void;
 }
 
 type ScanType = "appflow" | "blueprint" | "data";
@@ -84,7 +94,12 @@ function formatRunnerTime(iso: string | null): string {
   return date.toLocaleString("de-DE");
 }
 
-export function Sidebar({ activeScreen, onNavigate, onNewProject }: SidebarProps) {
+function navKeyToPath(key: ShellScreen): string {
+  return key === "projects" ? "/" : `/${key}`;
+}
+
+export function Sidebar({ activeScreen, onNavigate, onNewProject, onDomReport }: SidebarProps) {
+  const navRef = useRef<HTMLElement | null>(null);
   const { activeProject, scanStatuses } = useVisudev();
   const { user, loading: authLoading, signOut } = useAuth();
   const [authDialogOpen, setAuthDialogOpen] = useState(false);
@@ -202,6 +217,37 @@ export function Sidebar({ activeScreen, onNavigate, onNewProject }: SidebarProps
   const runsForDialog = runnerRunsSnapshot?.runs ?? [];
   const runsTotals = runnerRunsSnapshot?.totals;
 
+  useEffect(() => {
+    if (typeof window === "undefined" || window === window.top || !onDomReport) return;
+    const el = navRef.current;
+    if (!el) return;
+    const send = () => {
+      const buttons = el.querySelectorAll<HTMLElement>("[data-nav-path]");
+      const navItems: NavItemRect[] = [];
+      buttons.forEach((btn) => {
+        const path = btn.getAttribute("data-nav-path");
+        const label = btn.querySelector(`.${styles.navLabel}`)?.textContent?.trim() ?? "";
+        if (path == null) return;
+        const rect = btn.getBoundingClientRect();
+        navItems.push({
+          path,
+          label,
+          rect: {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+          },
+        });
+      });
+      if (navItems.length) onDomReport(navItems);
+    };
+    send();
+    const ro = new ResizeObserver(send);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [onDomReport, activeScreen]);
+
   const copyRunsToClipboard = async () => {
     const payload = {
       checkedAt: new Date().toISOString(),
@@ -230,9 +276,8 @@ export function Sidebar({ activeScreen, onNavigate, onNewProject }: SidebarProps
     const status = scanStatuses[scanType];
     if (status.status === "running") {
       return (
-        <span className={styles.scanIndicator}>
-          <Loader2 className={styles.scanIcon} />
-          <span>{status.progress}%</span>
+        <span className={styles.scanIndicator} role="status" aria-label="Analyse läuft">
+          <Loader2 className={styles.scanIconSpinner} aria-hidden="true" />
         </span>
       );
     }
@@ -273,7 +318,7 @@ export function Sidebar({ activeScreen, onNavigate, onNewProject }: SidebarProps
         </div>
       </div>
 
-      <nav className={styles.nav}>
+      <nav className={styles.nav} ref={navRef}>
         {navItems.map((item) => {
           const isActive = activeScreen === item.key;
           const isDisabled = Boolean(item.requiresProject && !activeProject);
@@ -283,6 +328,7 @@ export function Sidebar({ activeScreen, onNavigate, onNewProject }: SidebarProps
             <Fragment key={item.key}>
               <button
                 type="button"
+                data-nav-path={navKeyToPath(item.key)}
                 onClick={() => (!isDisabled ? onNavigate(item.key) : undefined)}
                 disabled={isDisabled}
                 className={clsx(
@@ -351,7 +397,7 @@ export function Sidebar({ activeScreen, onNavigate, onNewProject }: SidebarProps
 
       <AuthDialog open={authDialogOpen} onOpenChange={setAuthDialogOpen} />
       <Dialog open={runnerDialogOpen} onOpenChange={setRunnerDialogOpen}>
-        <DialogContent className={styles.runnerDialogContent}>
+        <DialogContent className={styles.runnerDialogContent} data-visudev-modal="runner-runs">
           <DialogHeader>
             <DialogTitle>Runner-Runs</DialogTitle>
             <DialogDescription>

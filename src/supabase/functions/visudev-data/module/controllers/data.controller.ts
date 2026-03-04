@@ -67,6 +67,13 @@ export class DataController {
     return this.ok<ErdResponseDto>(c, data);
   }
 
+  /** Sync ERD from project's connected Supabase DB (integrations). No body. */
+  public async syncErd(c: Context): Promise<Response> {
+    const projectId = this.parseProjectId(c);
+    const data = await this.service.syncErdFromSupabase(projectId);
+    return this.ok<ErdResponseDto>(c, data);
+  }
+
   private parseProjectId(c: Context): string {
     try {
       return projectIdSchema.parse(c.req.param("projectId"));

@@ -29,4 +29,8 @@ export function registerDataRoutes(
     "/:projectId/erd",
     asyncHandler(controller.updateErd.bind(controller)),
   );
+  app.post(
+    "/:projectId/erd/sync",
+    asyncHandler(controller.syncErd.bind(controller)),
+  );
 }

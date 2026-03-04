@@ -175,8 +175,28 @@
 
 .loadingState,
 .errorState {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
   padding: 2rem 0;
   text-align: center;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.loadingSpinner {
+  animation: spin 1s linear infinite;
+  color: var(--color-primary);
+  height: 2rem;
+  width: 2rem;
 }
 
 .loadingText {

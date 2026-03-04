@@ -48,6 +48,13 @@ export function usePreviewPostMessage(
         const report = data as VisudevDomReport;
         if (typeof report.route !== "string") return;
         const sourceScreenId = iframeToScreenRef.current.get(event.source as Window);
+        if (process.env.NODE_ENV === "development") {
+          // eslint-disable-next-line no-console
+          console.debug("[VisuDEV dom-report]", {
+            sourceScreenId: sourceScreenId ?? "(no mapping)",
+            navItemsCount: report.navItems?.length ?? 0,
+          });
+        }
         if (!sourceScreenId) return;
         const sourceScreen = screens.find((screen) => screen.id === sourceScreenId);
         markScreenLoaded(sourceScreenId, sourceScreen?.name, "dom-report");

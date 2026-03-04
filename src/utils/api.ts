@@ -208,6 +208,12 @@ export const dataAPI = {
       method: "PUT",
       body: JSON.stringify(data),
     }),
+
+  /** Sync ERD from project's connected Supabase DB (integrations). Fills Data view with actual tables. */
+  syncERD: (projectId: string) =>
+    apiRequest<ERDData>(`/visudev-data/${projectId}/erd/sync`, {
+      method: "POST",
+    }),
 };
 
 // ==================== LOGS ====================

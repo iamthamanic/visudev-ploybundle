@@ -224,7 +224,15 @@
   pointer-events: none;
 }
 
-.edgeNav {
+/** Default: gray; used until user clicks an edge. */
+.edgeNavDefault {
+  fill: none;
+  stroke: var(--color-border);
+  stroke-width: 2.5;
+}
+
+/** Selected (clicked) navigate edge: green. */
+.edgeNavSelected {
   fill: none;
   stroke: var(--color-primary);
   stroke-width: 3;
@@ -237,7 +245,11 @@
   stroke-dasharray: 6 4;
 }
 
-.arrowNav {
+.arrowNavDefault {
+  fill: var(--color-border);
+}
+
+.arrowNavSelected {
   fill: var(--color-primary);
 }
 
@@ -280,6 +292,7 @@
   z-index: 0;
   width: var(--nodes-layer-width, 100%);
   height: var(--nodes-layer-height, 100%);
+  transform: translate(var(--nodes-layer-offset-x, 0), var(--nodes-layer-offset-y, 0));
   pointer-events: none;
 }
 
@@ -310,6 +323,7 @@
 }
 
 .nodeLabel {
+  position: relative;
   flex-shrink: 0;
   padding: 0.25rem 0.5rem;
   font-size: 0.75rem;
@@ -320,6 +334,19 @@
   display: flex;
   align-items: center;
   gap: 0.25rem;
+}
+
+.nodeDock {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--color-primary);
+  flex-shrink: 0;
+  pointer-events: none;
 }
 
 .nodeDragHandle {
@@ -444,9 +471,37 @@
   flex: 1;
   align-items: center;
   display: flex;
+  flex-direction: column;
   justify-content: center;
   font-size: 0.75rem;
   color: var(--color-muted-foreground);
+  gap: 0.25rem;
+}
+
+.nodeStateIcon {
+  width: 2rem;
+  height: 2rem;
+  opacity: 0.7;
+}
+
+.nodeStateLabel {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.nodeStateName {
+  font-size: 0.8rem;
+  font-weight: 500;
+  text-align: center;
+}
+
+.nodeStateThumbnail {
+  width: 100%;
+  max-height: 140px;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+  background-color: var(--color-surface);
 }
 
 .nodeFailed {

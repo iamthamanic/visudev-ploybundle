@@ -4,7 +4,7 @@
  * Location: src/modules/appflow/components/FlowNodeCard.tsx
  */
 
-import { GripVertical, Loader2 } from "lucide-react";
+import { GripVertical, PanelTop, LayoutList, Menu, Loader2 } from "lucide-react";
 import type { CSSProperties } from "react";
 import clsx from "clsx";
 import type { Screen } from "../../../lib/visudev/types";
@@ -13,7 +13,6 @@ import styles from "../styles/LiveFlowCanvas.module.css";
 
 /** Virtual viewport scale: iframe content is rendered at (width/scale x height/scale) then scaled down so it fits the card and keeps proportion. */
 const NODE_IFRAME_SCALE = 0.45;
-
 export const NODE_FAIL_REASONS = {
   LOAD_ERROR:
     "Ladefehler (-102 = Verbindung verweigert: nichts läuft unter der URL). „Preview starten“ oder Deployed-URL prüfen.",
@@ -57,6 +56,8 @@ export function FlowNodeCard({
   const reason = failReason ?? NODE_FAIL_REASONS.LOAD_ERROR;
   const isConnectionError =
     /ECONNREFUSED|Bad Gateway|nicht erreichbar|502|-102|Verbindung verweigert/i.test(reason);
+  const isStateNode =
+    screen.type === "modal" || screen.type === "tab" || screen.type === "dropdown";
 
   return (
     <div
@@ -91,6 +92,7 @@ export function FlowNodeCard({
         )}
         {screen.name}
         {screen.path ? ` · ${screen.path}` : ""}
+        <span className={styles.nodeDock} aria-hidden="true" />
       </div>
       {domReport && (
         <div className={styles.nodeLiveReport} title="Live-Daten von der App">
@@ -98,7 +100,32 @@ export function FlowNodeCard({
           {domReport.buttons != null && ` · ${domReport.buttons.length} Buttons`}
         </div>
       )}
-      {loadState === "failed" ? (
+      {isStateNode ? (
+        <div
+          className={styles.nodePlaceholder}
+          data-screen-id={screen.id}
+          data-testid="screen-card-state-node"
+          title={screen.stateKey ?? screen.name}
+        >
+          {screen.screenshotUrl ? (
+            <img src={screen.screenshotUrl} alt="" className={styles.nodeStateThumbnail} />
+          ) : (
+            <>
+              {screen.type === "modal" ? (
+                <PanelTop className={styles.nodeStateIcon} aria-hidden="true" />
+              ) : screen.type === "tab" ? (
+                <LayoutList className={styles.nodeStateIcon} aria-hidden="true" />
+              ) : (
+                <Menu className={styles.nodeStateIcon} aria-hidden="true" />
+              )}
+              <span className={styles.nodeStateLabel}>
+                {screen.type === "modal" ? "Modal" : screen.type === "tab" ? "Tab" : "Dropdown"}
+              </span>
+            </>
+          )}
+          <span className={styles.nodeStateName}>{screen.name}</span>
+        </div>
+      ) : loadState === "failed" ? (
         <div
           className={styles.nodeFailed}
           role="status"
@@ -143,7 +170,11 @@ export function FlowNodeCard({
               data-testid="screen-card-iframe"
               data-screen-id={screen.id}
               sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-              onLoad={onLoad}
+              onLoad={(e) => {
+                const iframe = e.currentTarget;
+                if (iframe?.contentWindow) registerIframe(iframe.contentWindow, screen.id);
+                onLoad();
+              }}
               onError={() => onError(NODE_FAIL_REASONS.LOAD_ERROR, screen.name, iframeSrc)}
               ref={(el) => {
                 if (el?.contentWindow) registerIframe(el.contentWindow, screen.id);
@@ -158,7 +189,9 @@ export function FlowNodeCard({
           )}
         </div>
       ) : (
-        <div className={styles.nodePlaceholder}>{NODE_FAIL_REASONS.NO_URL}</div>
+        <div className={styles.nodePlaceholder} data-screen-id={screen.id}>
+          {NODE_FAIL_REASONS.NO_URL}
+        </div>
       )}
     </div>
   );

@@ -3,7 +3,7 @@
  * Location: src/modules/appflow/layout.ts
  */
 
-import type { Screen, Flow } from "../../lib/visudev/types";
+import type { Screen, Flow, EdgeTrigger } from "../../lib/visudev/types";
 
 export interface NodePosition {
   x: number;
@@ -11,17 +11,25 @@ export interface NodePosition {
   depth: number;
 }
 
+export type GraphEdgeType = "navigate" | "call" | "open-modal" | "switch-tab" | "dropdown-action";
+
 export interface GraphEdge {
   fromId: string;
   toId: string;
-  type: "navigate" | "call";
+  type: GraphEdgeType;
+  /** For type "navigate": target path used for this edge (enables anchor Y by order). */
+  targetPath?: string;
+  /** For open-modal / switch-tab: trigger label, selector, etc. */
+  trigger?: EdgeTrigger;
 }
 
 /**
  * Derives a preview path for a screen when path is missing or generic.
- * Matches Shell routes: projects -> / or /projects, AppFlowPage -> /appflow, etc.
+ * Modal/tab screens have no URL → return "" so no iframe is loaded (placeholder card).
  */
 export function getScreenPreviewPath(screen: Screen): string {
+  const type = screen.type ?? "page";
+  if (type === "modal" || type === "tab" || type === "dropdown") return "";
   const p = (screen.path || "").trim();
   if (p && p !== "/") return p;
   const name = (screen.name || "").trim();
@@ -59,25 +67,69 @@ export function previewPathToSegment(previewPath: string): string {
   return p === "" || p === "projects" ? "projects" : p;
 }
 
+/** Normalize path to a segment for matching (lowercase, no leading slash, strip page/screen/view suffix). */
+function pathToSegment(path: string): string {
+  let p = (path || "").trim().replace(/\/$/, "").slice(1).toLowerCase();
+  p = p.replace(/(?:page|screen|view)$/i, "") || p;
+  return p === "" ? "projects" : p;
+}
+
+/** Screens that have a real route (page/screen/view). Modals/tabs/dropdowns are state-only and must not count as path targets. */
+function isRouteScreen(s: Screen): boolean {
+  const t = s.type ?? "page";
+  return t !== "modal" && t !== "tab" && t !== "dropdown";
+}
+
+/** Resolve target screen by path: only route screens (no modal/tab/dropdown), so "projects" doesn't match every modal with path "/". */
+function findTargetScreenByPath(screens: Screen[], targetPath: string): Screen | undefined {
+  if (!targetPath || typeof targetPath !== "string") return undefined;
+  const normalized = targetPath.trim().startsWith("/")
+    ? targetPath.trim()
+    : `/${targetPath.trim()}`;
+  const routeScreens = screens.filter(isRouteScreen);
+  const exact = routeScreens.find((s) => (s.path || "").trim() === normalized);
+  if (exact) return exact;
+  const segment = pathToSegment(normalized);
+  const bySegment = routeScreens.filter((s) => pathToSegment(s.path || "") === segment);
+  if (bySegment.length === 0) return undefined;
+  if (bySegment.length === 1) return bySegment[0];
+  return bySegment.sort((a, b) => (a.path || "").length - (b.path || "").length)[0];
+}
+
 export function getScreenDepths(screens: Screen[]): Map<string, number> {
   const depths = new Map<string, number>();
   const visited = new Set<string>();
+  const screenById = new Map(screens.map((s) => [s.id, s]));
 
-  const rootScreens = screens.filter(
-    (s) =>
-      s.path === "/" ||
-      s.path === "/home" ||
-      s.path === "/login" ||
-      s.path === "/index" ||
-      s.name.toLowerCase().includes("home") ||
-      s.name.toLowerCase().includes("index"),
-  );
+  const rootScreens = screens.filter((s) => {
+    const path = (s.path || "").toLowerCase();
+    const name = (s.name || "").toLowerCase();
+    const isRoute = s.type === "page" || s.type === "screen" || s.type === "view";
+    return (
+      isRoute &&
+      (path === "/" ||
+        path === "/home" ||
+        path === "/login" ||
+        path === "/index" ||
+        path === "/projects" ||
+        name.includes("home") ||
+        name.includes("index") ||
+        name.includes("projects") ||
+        name.includes("shell"))
+    );
+  });
   const queue: Array<{ screen: Screen; depth: number }> = (
-    rootScreens.length > 0 ? rootScreens : [screens[0]].filter(Boolean)
-  ).map((s) => ({
-    screen: s,
-    depth: 0,
-  }));
+    rootScreens.length > 0
+      ? rootScreens
+      : screens
+          .filter(
+            (s) =>
+              (s.type ?? "page") !== "modal" &&
+              (s.type ?? "page") !== "tab" &&
+              (s.type ?? "page") !== "dropdown",
+          )
+          .slice(0, 1)
+  ).map((s) => ({ screen: s, depth: 0 }));
 
   while (queue.length > 0) {
     const { screen, depth } = queue.shift()!;
@@ -85,20 +137,27 @@ export function getScreenDepths(screens: Screen[]): Map<string, number> {
     visited.add(screen.id);
     depths.set(screen.id, depth);
     (screen.navigatesTo || []).forEach((targetPath) => {
-      const target = screens.find(
-        (s) => s.path === targetPath || (targetPath && s.path.includes(targetPath)),
-      );
+      const target = findTargetScreenByPath(screens, targetPath);
+      if (target && !visited.has(target.id)) queue.push({ screen: target, depth: depth + 1 });
+    });
+    (screen.stateTargets || []).forEach((st) => {
+      const target = screenById.get(st.targetScreenId);
       if (target && !visited.has(target.id)) queue.push({ screen: target, depth: depth + 1 });
     });
   }
   screens.forEach((s) => {
-    if (!depths.has(s.id)) depths.set(s.id, 0);
+    if (!depths.has(s.id)) {
+      const parent = s.parentScreenId ? screenById.get(s.parentScreenId) : undefined;
+      depths.set(s.id, parent != null ? (depths.get(parent.id) ?? 0) + 1 : 0);
+    }
   });
   return depths;
 }
 
 export function buildEdges(screens: Screen[], flows: Flow[]): GraphEdge[] {
   const edges: GraphEdge[] = [];
+  const seenNavigate = new Set<string>();
+
   const flowToScreen = new Map<string, string>();
   screens.forEach((s) => {
     (s.flows || []).forEach((fid) => flowToScreen.set(fid, s.id));
@@ -109,13 +168,36 @@ export function buildEdges(screens: Screen[], flows: Flow[]): GraphEdge[] {
     flowByNameOrId.set(f.name, f);
   });
 
+  /* Phase 3: target resolved by findTargetScreenByPath (exact path then segment, deterministic). */
   screens.forEach((source) => {
     (source.navigatesTo || []).forEach((targetPath) => {
-      const target = screens.find(
-        (s) => s.path === targetPath || (targetPath && s.path.includes(targetPath)),
-      );
-      if (target && target.id !== source.id)
-        edges.push({ fromId: source.id, toId: target.id, type: "navigate" });
+      const target = findTargetScreenByPath(screens, targetPath);
+      if (!target || target.id === source.id) return;
+      const key = `${source.id}\t${target.id}`;
+      if (seenNavigate.has(key)) return;
+      seenNavigate.add(key);
+      const pathNorm = targetPath.trim().startsWith("/")
+        ? targetPath.trim()
+        : `/${targetPath.trim()}`;
+      edges.push({
+        fromId: source.id,
+        toId: target.id,
+        type: "navigate",
+        targetPath: pathNorm,
+      });
+    });
+    (source.stateTargets || []).forEach((st) => {
+      const target = screens.find((s) => s.id === st.targetScreenId);
+      if (!target || target.id === source.id) return;
+      const key = `${source.id}\t${target.id}\t${st.edgeType}\t${st.trigger?.label ?? ""}`;
+      if (seenNavigate.has(key)) return;
+      seenNavigate.add(key);
+      edges.push({
+        fromId: source.id,
+        toId: target.id,
+        type: st.edgeType,
+        trigger: st.trigger,
+      });
     });
   });
 
@@ -130,12 +212,52 @@ export function buildEdges(screens: Screen[], flows: Flow[]): GraphEdge[] {
     });
   });
 
+  /* Fallback when no navigate edges: root → all others. Root must be a route screen (not modal/tab/dropdown). */
   if (edges.length === 0 && screens.length >= 2) {
+    const routeScreens = screens.filter(isRouteScreen);
     const root =
-      screens.find((s) => s.path === "/" || s.path === "/projects" || s.path === "/ProjectsPage") ??
+      routeScreens.find(
+        (s) =>
+          (s.path || "").trim() === "/" ||
+          (s.path || "").trim() === "/projects" ||
+          (s.path || "").trim() === "/ProjectsPage",
+      ) ??
+      routeScreens[0] ??
       screens[0];
     screens.forEach((target) => {
-      if (target.id !== root.id) edges.push({ fromId: root.id, toId: target.id, type: "navigate" });
+      if (target.id !== root.id)
+        edges.push({
+          fromId: root.id,
+          toId: target.id,
+          type: "navigate",
+          targetPath: target.path?.trim() || undefined,
+        });
+    });
+  }
+
+  /* If Shell (/ or /projects) has no outgoing navigate edges, add edges from Shell to all others. Shell must be a route screen (not a modal with path "/"). */
+  const shellScreen = screens
+    .filter(isRouteScreen)
+    .find((s) => (s.path || "").trim() === "/" || (s.path || "").trim() === "/projects");
+  if (
+    shellScreen &&
+    screens.length >= 2 &&
+    !edges.some((e) => e.type === "navigate" && e.fromId === shellScreen.id)
+  ) {
+    screens.forEach((target) => {
+      if (target.id === shellScreen.id) return;
+      const key = `${shellScreen.id}\t${target.id}`;
+      if (seenNavigate.has(key)) return;
+      seenNavigate.add(key);
+      const pathNorm = (target.path || "").trim().startsWith("/")
+        ? (target.path || "").trim()
+        : `/${(target.path || "").trim()}`;
+      edges.push({
+        fromId: shellScreen.id,
+        toId: target.id,
+        type: "navigate",
+        targetPath: pathNorm || undefined,
+      });
     });
   }
 
@@ -160,9 +282,31 @@ export function computePositions(
   let x = 0;
   columns.forEach((col) => {
     if (!col?.length) return;
-    col.sort((a, b) => a.name.localeCompare(b.name));
+    const routeScreens = col.filter(
+      (s) =>
+        (s.type ?? "page") !== "modal" &&
+        (s.type ?? "page") !== "tab" &&
+        (s.type ?? "page") !== "dropdown",
+    );
+    const stateScreens = col.filter(
+      (s) => s.type === "modal" || s.type === "tab" || s.type === "dropdown",
+    );
+    const ordered: Screen[] = [];
+    routeScreens.sort((a, b) => a.name.localeCompare(b.name));
+    stateScreens.sort(
+      (a, b) =>
+        (a.parentScreenId ?? "").localeCompare(b.parentScreenId ?? "") ||
+        a.name.localeCompare(b.name),
+    );
+    routeScreens.forEach((r) => {
+      ordered.push(r);
+      stateScreens
+        .filter((s) => s.parentScreenId === r.id || s.parentPath === r.path)
+        .forEach((s) => ordered.push(s));
+    });
+    stateScreens.filter((s) => !ordered.includes(s)).forEach((s) => ordered.push(s));
     let y = 0;
-    col.forEach((s) => {
+    ordered.forEach((s) => {
       pos.set(s.id, { x, y, depth: depths.get(s.id) ?? 0 });
       y += nodeHeight + vSpacing;
     });

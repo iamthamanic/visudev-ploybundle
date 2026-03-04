@@ -5,7 +5,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, Search, ToggleLeft, ToggleRight } from "lucide-react";
+import { AlertCircle, Loader2, Search, ToggleLeft, ToggleRight } from "lucide-react";
 import clsx from "clsx";
 import { toast } from "sonner";
 import { useLogs } from "../../../utils/useVisuDev";
@@ -149,7 +149,8 @@ export function LogsPage({ projectId }: LogsPageProps) {
 
       <div className={styles.content}>
         {loading ? (
-          <div className={styles.loadingState}>
+          <div className={styles.loadingState} role="status" aria-live="polite">
+            <Loader2 className={styles.loadingSpinner} aria-hidden="true" />
             <p className={styles.loadingText}>Lade Logs…</p>
           </div>
         ) : error ? (
