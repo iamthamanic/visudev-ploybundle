@@ -1,22 +1,28 @@
-import type { FileContent, Screen, StateTarget } from "../dto/index.ts";
+import type { FileContent, Screen } from "../dto/index.ts";
+import { NavigationLinkExtractor } from "./navigation-link-extractor.ts";
+import { PageLikeExtractor } from "./page-like-extractor.ts";
+import { StateTargetExtractor } from "./state-target-extractor.ts";
 
-/** Optional: read data-visudev-* attribute near a match (same line or next ~200 chars). Safe, additive only. */
-function getVisudevAttrInContext(
-  content: string,
-  startIndex: number,
-  attrName: string,
-): string | undefined {
-  const slice = content.slice(startIndex, startIndex + 400);
-  const re = new RegExp(
-    `${attrName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}=["']([^"']{1,80})["']`,
-    "i",
-  );
-  const m = re.exec(slice);
-  const raw = m?.[1]?.trim();
-  return raw && raw.length >= 1 && raw.length <= 80 ? raw : undefined;
-}
-
+/**
+ * Orchestrates screen extraction: framework-specific routing extraction (Next/React Router/Nuxt/etc.)
+ * delegates navigation-link extraction and modal/tab/dropdown detection to dedicated services (SRP).
+ * Dependency Inversion: navExtractor and stateTargetExtractor can be injected for tests.
+ */
 export class ScreenExtractionService {
+  private readonly navExtractor: NavigationLinkExtractor;
+  private readonly pageLikeExtractor: PageLikeExtractor;
+  private readonly stateTargetExtractor: StateTargetExtractor;
+
+  constructor(
+    navExtractor: NavigationLinkExtractor,
+    stateTargetExtractor: StateTargetExtractor,
+    pageLikeExtractor: PageLikeExtractor,
+  ) {
+    this.navExtractor = navExtractor;
+    this.stateTargetExtractor = stateTargetExtractor;
+    this.pageLikeExtractor = pageLikeExtractor;
+  }
+
   public extractNextJsAppRouterScreens(files: FileContent[]): Screen[] {
     const screens: Screen[] = [];
 
@@ -41,7 +47,7 @@ export class ScreenExtractionService {
           filePath: file.path,
           type: "page",
           flows: [],
-          navigatesTo: this.extractNavigationLinks(file.content),
+          navigatesTo: this.navExtractor.extractNavigationLinks(file.content),
           framework: "nextjs-app-router",
           componentCode: file.content,
         });
@@ -79,7 +85,7 @@ export class ScreenExtractionService {
           filePath: file.path,
           type: "page",
           flows: [],
-          navigatesTo: this.extractNavigationLinks(file.content),
+          navigatesTo: this.navExtractor.extractNavigationLinks(file.content),
           framework: "nextjs-pages-router",
           componentCode: file.content,
         });
@@ -101,7 +107,9 @@ export class ScreenExtractionService {
       }
 
       const routeEntries = this.parseReactRouterRoutes(file.content);
-      const navigatesTo = this.extractNavigationLinks(file.content);
+      const navigatesTo = this.navExtractor.extractNavigationLinks(
+        file.content,
+      );
       const basename = this.getReactRouterBasename(file.content);
 
       const pathCandidates: string[] = [];
@@ -464,7 +472,7 @@ export class ScreenExtractionService {
           filePath: file.path,
           type: "page",
           flows: [],
-          navigatesTo: this.extractNavigationLinks(file.content),
+          navigatesTo: this.navExtractor.extractNavigationLinks(file.content),
           framework: "nuxt",
           componentCode: file.content,
         });
@@ -512,7 +520,7 @@ export class ScreenExtractionService {
         filePath: appFile.path,
         type: "view",
         flows: [],
-        navigatesTo: this.extractNavigationLinks(appFile.content),
+        navigatesTo: this.navExtractor.extractNavigationLinks(appFile.content),
         framework: "react-state",
       });
     }
@@ -555,7 +563,9 @@ export class ScreenExtractionService {
           filePath: appFile.path,
           type: "view",
           flows: [],
-          navigatesTo: this.extractNavigationLinks(appFile.content),
+          navigatesTo: this.navExtractor.extractNavigationLinks(
+            appFile.content,
+          ),
           framework: "react-hash",
         });
       }
@@ -582,7 +592,9 @@ export class ScreenExtractionService {
             filePath: appFile.path,
             type: "view",
             flows: [],
-            navigatesTo: this.extractNavigationLinks(appFile.content),
+            navigatesTo: this.navExtractor.extractNavigationLinks(
+              appFile.content,
+            ),
             framework: "react-hash",
           });
         }
@@ -689,16 +701,47 @@ export class ScreenExtractionService {
       filePath: appFile?.path ?? "unknown",
       type: "screen",
       flows: [],
-      navigatesTo: appFile ? this.extractNavigationLinks(appFile.content) : [],
+      navigatesTo: appFile
+        ? this.navExtractor.extractNavigationLinks(appFile.content)
+        : [],
       framework: "single-page",
     }];
   }
 
   public extractScreensHeuristic(files: FileContent[]): Screen[] {
     const screens: Screen[] = [];
+    const seenPaths = new Set<string>();
 
     files.forEach((file) => {
       if (file.path.includes("/components/")) {
+        return;
+      }
+
+      const modulesMatch = file.path.match(
+        /^(?:src\/)?modules\/([^/]+)\/pages\/([^/]+)\.(tsx?|jsx?)$/i,
+      );
+      if (modulesMatch) {
+        const moduleName = modulesMatch[1].toLowerCase();
+        const fileName = modulesMatch[2];
+        const path = moduleName === "shell" ? "/" : `/${moduleName}`;
+        if (seenPaths.has(path)) return;
+        seenPaths.add(path);
+        const displayName = fileName
+          .replace(/Page$|Screen$|View$/i, "")
+          .replace(/([A-Z])/g, " $1")
+          .trim() ||
+          moduleName.charAt(0).toUpperCase() + moduleName.slice(1);
+        screens.push({
+          id: `screen:${file.path}`,
+          name: displayName.charAt(0).toUpperCase() + displayName.slice(1),
+          path,
+          filePath: file.path,
+          type: "page",
+          flows: [],
+          navigatesTo: this.navExtractor.extractNavigationLinks(file.content),
+          framework: "heuristic",
+          componentCode: file.content,
+        });
         return;
       }
 
@@ -718,7 +761,7 @@ export class ScreenExtractionService {
           filePath: file.path,
           type: "screen",
           flows: [],
-          navigatesTo: this.extractNavigationLinks(file.content),
+          navigatesTo: this.navExtractor.extractNavigationLinks(file.content),
           framework: "heuristic",
           componentCode: file.content,
         });
@@ -747,7 +790,7 @@ export class ScreenExtractionService {
             filePath: file.path,
             type: "screen",
             flows: [],
-            navigatesTo: this.extractNavigationLinks(file.content),
+            navigatesTo: this.navExtractor.extractNavigationLinks(file.content),
             framework: "heuristic",
             componentCode: file.content,
           });
@@ -758,381 +801,17 @@ export class ScreenExtractionService {
     return screens;
   }
 
-  /** Normalize segment (e.g. "appflow") or path to a path with leading slash. */
-  private normalizeNavPath(segmentOrPath: string): string {
-    const s = segmentOrPath.trim();
-    if (!s || s.startsWith("//") || s.toLowerCase().startsWith("javascript:")) {
-      return "";
-    }
-    if (s.includes("://")) return "";
-    if (s.startsWith("/")) return s;
-    return `/${s}`;
-  }
-
-  private extractNavigationLinks(content: string): string[] {
-    const links: string[] = [];
-    const add = (raw: string) => {
-      const path = this.normalizeNavPath(raw);
-      if (path && !links.includes(path)) links.push(path);
-    };
-
-    const patterns = [
-      /router\.push\s*\(\s*["']([^"']+)["']/g,
-      /href=["']([^"']+)["']/g,
-      /navigate\s*\(\s*["']([^"']+)["']/g,
-      /navigateTo\s*\(\s*["']([^"']+)["']/g,
-      /<Link[^>]+to=["']([^"']+)["']/g,
-      /<NavLink[^>]+to=["']([^"']+)["']/g,
-      // Programmatic / tab navigation (Phase 1: Shell onNavigate, handleNavigate, setActiveScreen)
-      /onNavigate\s*\(\s*["']([^"']+)["']/g,
-      /handleNavigate\s*\(\s*[\w\s,]*["']([^"']+)["']/g,
-      /setActiveScreen\s*\(\s*["']([^"']+)["']/g,
-      /(?:pushState|replaceState)\s*\(\s*[^,]*,\s*["'][^"']*([^"']*\/[^"']+)["']/g,
-      // Nav config: path, route, screen in objects; key in nav items (appflow, blueprint, ...)
-      /\bpath\s*:\s*["']([^"']+)["']/g,
-      /\broute\s*:\s*["']([^"']+)["']/g,
-      /\bscreen\s*:\s*["']([^"']+)["']/g,
-      /\bkey\s*:\s*["'](appflow|blueprint|data|logs|settings|projects)["']/g,
-    ];
-
-    patterns.forEach((pattern) => {
-      pattern.lastIndex = 0;
-      let match: RegExpExecArray | null;
-      while ((match = pattern.exec(content)) !== null) {
-        const value = match[1];
-        if (value && value.length < 120) add(value);
-      }
-    });
-
-    return links;
-  }
-
   public extractPageLikeScreens(
     screens: Screen[],
     files: FileContent[],
   ): void {
-    const existingPaths = new Set(
-      screens.map((s) =>
-        (s.path || "").trim().toLowerCase().replace(/\/$/, "") || "/"
-      ),
-    );
-    const primitiveSuffixes =
-      /(Trigger|Footer|Context|Title|Description|Content)$/i;
-    const pageLikePattern =
-      /(?:export\s+)?(?:function|const)\s+(\w+(?:Screen|Page|View)|Auth)\s*[<(]/g;
-    files.forEach((file) => {
-      const content = file.content;
-      const seen = new Set<string>();
-      let match: RegExpExecArray | null;
-      pageLikePattern.lastIndex = 0;
-      while ((match = pageLikePattern.exec(content)) !== null) {
-        const name = match[1];
-        if (primitiveSuffixes.test(name)) continue;
-        if (seen.has(name)) continue;
-        seen.add(name);
-        const base = name.replace(/(Screen|Page|View|Auth)$/i, "").trim() ||
-          name;
-        const pathSeg = base.replace(/([A-Z])/g, (c) => c.toLowerCase());
-        const path = pathSeg ? `/${pathSeg}` : "/";
-        const pathNorm = path.toLowerCase().replace(/\/$/, "") || "/";
-        if (existingPaths.has(pathNorm)) continue;
-        existingPaths.add(pathNorm);
-        const id = `screen:page-like:${file.path}:${pathNorm}`;
-        const displayName = name === "Auth"
-          ? "Auth"
-          : name.replace(/(Screen|Page|View)$/i, "").trim() || name;
-        screens.push({
-          id,
-          name: displayName,
-          path,
-          filePath: file.path,
-          type: "screen",
-          flows: [],
-          navigatesTo: this.extractNavigationLinks(content),
-          framework: "page-like",
-        });
-      }
-    });
+    this.pageLikeExtractor.extractPageLikeScreens(screens, files);
   }
 
   public extractModalsTabsAndDropdowns(
     screens: Screen[],
     files: FileContent[],
   ): void {
-    const hostByFilePath = new Map<string, Screen>();
-    screens.forEach((s) => {
-      if (!hostByFilePath.has(s.filePath)) hostByFilePath.set(s.filePath, s);
-    });
-    files.forEach((file) => {
-      const host = hostByFilePath.get(file.path);
-      const parentPath = host?.path ?? "/";
-      const parentId = host?.id;
-      this.extractModalsInFile(file, screens, parentPath, parentId);
-      this.extractTabsInFile(file, screens, parentPath, parentId);
-      this.extractDropdownsInFile(file, screens, parentPath, parentId);
-    });
-  }
-
-  private extractDropdownsInFile(
-    file: FileContent,
-    screens: Screen[],
-    parentPath: string,
-    parentId: string | undefined,
-  ): void {
-    const content = file.content;
-    const hasDropdown =
-      /DropdownMenu|DropdownMenuItem|Select\b|SelectItem|SelectTrigger|<select\b/i
-        .test(
-          content,
-        );
-    if (!hasDropdown) return;
-    const itemLabels = new Set<string>();
-    const itemPatterns = [
-      /DropdownMenuItem\s+[^>]*>\s*([^<]+)</g,
-      /SelectItem\s+value=["'][^"']*["'][^>]*>\s*([^<]+)</g,
-      /<option\s+value=["'][^"']*["'][^>]*>\s*([^<]+)</g,
-      /<MenuItem[^>]*>\s*([^<]+)</g,
-      /["']([^"']{2,40})["']\s*:\s*(?:<\w+|\()[\s\S]*?DropdownMenu/gi,
-    ];
-    for (const pattern of itemPatterns) {
-      pattern.lastIndex = 0;
-      let match: RegExpExecArray | null;
-      while ((match = pattern.exec(content)) !== null) {
-        const raw = (match[1] ?? "").trim().replace(/\s+/g, " ").slice(0, 50);
-        if (raw.length >= 2) itemLabels.add(raw);
-      }
-    }
-    if (itemLabels.size === 0) return;
-    const id = `screen:dropdown:${file.path}:0`;
-    const dropdownScreen: Screen = {
-      id,
-      name: "Dropdown",
-      path: parentPath,
-      filePath: file.path,
-      type: "dropdown",
-      flows: [],
-      navigatesTo: [],
-      framework: "state",
-      parentPath,
-      parentScreenId: parentId,
-      stateKey: "dropdown:menu",
-    };
-    screens.push(dropdownScreen);
-    if (parentId) {
-      const host = screens.find((s) => s.id === parentId);
-      if (host) {
-        host.stateTargets = host.stateTargets ?? [];
-        itemLabels.forEach((label) => {
-          host!.stateTargets!.push({
-            targetScreenId: id,
-            edgeType: "dropdown-action",
-            trigger: { label },
-          });
-        });
-      }
-    }
-  }
-
-  private extractModalsInFile(
-    file: FileContent,
-    screens: Screen[],
-    parentPath: string,
-    parentId: string | undefined,
-  ): void {
-    const content = file.content;
-    const seenKeys = new Set<string>();
-    const seenDisplayNames = new Set<string>();
-    let index = 0;
-
-    const pushModal = (name: string, explicitDisplayName?: string | null) => {
-      const displayName = explicitDisplayName != null
-        ? explicitDisplayName.replace(/-/g, " ").replace(
-          /\b\w/g,
-          (c) => c.toUpperCase(),
-        )
-        : name.replace(/(Modal|Dialog|Drawer)$/i, "").trim() || name;
-      if (seenDisplayNames.has(displayName)) return;
-      const slug = name.replace(/[^a-z0-9]/gi, "-").toLowerCase() || "modal";
-      const stateKey = `modal:${slug}:${index}`;
-      if (seenKeys.has(stateKey)) return;
-      seenKeys.add(stateKey);
-      seenDisplayNames.add(displayName);
-      const id = `screen:modal:${file.path}:${index}`;
-      const modalScreen: Screen = {
-        id,
-        name: displayName,
-        path: parentPath,
-        filePath: file.path,
-        type: "modal",
-        flows: [],
-        navigatesTo: [],
-        framework: "state",
-        parentPath,
-        parentScreenId: parentId,
-        stateKey,
-      };
-      screens.push(modalScreen);
-      if (parentId) {
-        const host = screens.find((s) => s.id === parentId);
-        if (host) {
-          const st: StateTarget = {
-            targetScreenId: id,
-            edgeType: "open-modal",
-            trigger: { label: modalScreen.name },
-          };
-          host.stateTargets = host.stateTargets ?? [];
-          host.stateTargets.push(st);
-        }
-      }
-      index += 1;
-    };
-
-    /* 1) JSX: dialog/modal usage – tags (optional data-visudev-modal), role/aria, class patterns, modal-like props. */
-    const jsxTagPatterns: Array<{ re: RegExp; name: string }> = [
-      { re: /<Dialog\b[^>]*>/g, name: "Dialog" },
-      { re: /<Modal\b[^>]*>/g, name: "Modal" },
-      { re: /<Drawer\b[^>]*>/g, name: "Drawer" },
-      { re: /<DialogContent\b[^>]*>/g, name: "DialogContent" },
-      { re: /<Popover\b[^>]*>/g, name: "Popover" },
-      { re: /<Sheet\b[^>]*>/g, name: "Sheet" },
-      { re: /<AlertDialog\b[^>]*>/g, name: "AlertDialog" },
-      { re: /<AlertModal\b[^>]*>/g, name: "AlertModal" },
-      { re: /<Popup\b[^>]*>/g, name: "Popup" },
-      { re: /<Overlay\b[^>]*>/g, name: "Overlay" },
-    ];
-    jsxTagPatterns.forEach(({ re, name }) => {
-      re.lastIndex = 0;
-      let match: RegExpExecArray | null;
-      while ((match = re.exec(content)) !== null) {
-        const explicitName = getVisudevAttrInContext(
-          content,
-          match.index,
-          "data-visudev-modal",
-        );
-        pushModal(explicitName ?? name, explicitName ?? undefined);
-      }
-    });
-    /* role/aria (no tag). */
-    [/role=["']dialog["']/g, /aria-modal=["']true["']/g].forEach((re) => {
-      re.lastIndex = 0;
-      let _match: RegExpExecArray | null;
-      while ((_match = re.exec(content)) !== null) {
-        pushModal("Modal", undefined);
-      }
-    });
-    /* className/class with modal|dialog|drawer|overlay|popup. */
-    [
-      /className=["'][^"']*(?:modal|dialog|drawer|overlay|popup)[^"']*["']/gi,
-      /class=["'][^"']*(?:modal|dialog|drawer|overlay|popup)[^"']*["']/gi,
-    ].forEach((re) => {
-      re.lastIndex = 0;
-      let _match: RegExpExecArray | null;
-      while ((_match = re.exec(content)) !== null) {
-        pushModal("Modal", undefined);
-      }
-    });
-    /* Props: open=, onClose=, isOpen=, visible=, show=. */
-    const propsRe = /<(\w+)\b[^>]*\b(?:open|onClose|isOpen|visible|show)\s*=/g;
-    let propsMatch: RegExpExecArray | null;
-    while ((propsMatch = propsRe.exec(content)) !== null) {
-      const tagName = propsMatch[1] ?? "Modal";
-      if (!/^(button|input|select|textarea|form|a)$/i.test(tagName)) {
-        pushModal(tagName, undefined);
-      }
-    }
-
-    /* 2) Großzügig: Komponenten-Namen – *Dialog* / *Modal* / *Drawer* / *Popover* / *Popup* / *Overlay* / *Sheet* (auch unsauber), außer Primitives. */
-    const componentNamePatterns = [
-      /export\s+(?:function|const|class)\s+(\w*(?:Dialog|Modal|Drawer|Popover|Popup|Overlay|Sheet|AlertDialog|AlertModal)\w*)/gi,
-      /(?:function|const)\s+(\w*(?:Dialog|Modal|Drawer|Popover|Popup|Overlay|Sheet|AlertDialog|AlertModal)\w*)\s*[=(]/g,
-    ];
-    const primitiveNames =
-      /^(DialogTrigger|DialogClose|DialogTitle|DialogDescription|DialogContext|DialogFooter|PopoverTrigger|PopoverClose)$/i;
-    const modalNamesFromNames = new Set<string>();
-    for (const re of componentNamePatterns) {
-      re.lastIndex = 0;
-      let m: RegExpExecArray | null;
-      while ((m = re.exec(content)) !== null) {
-        const raw = (m[1] ?? "").trim();
-        if (!raw) continue;
-        if (primitiveNames.test(raw)) continue;
-        modalNamesFromNames.add(raw);
-      }
-    }
-    modalNamesFromNames.forEach((name) => pushModal(name));
-  }
-
-  private extractTabsInFile(
-    file: FileContent,
-    screens: Screen[],
-    parentPath: string,
-    parentId: string | undefined,
-  ): void {
-    const content = file.content;
-    const tabValuePatterns = [
-      /<Tab\s+value=["']([^"']+)["']/g,
-      /<Tabs\.Tab\s+value=["']([^"']+)["']/g,
-      /<TabPanel\s+value=["']([^"']+)["']/g,
-      /["'](\w+)["']\s*:\s*<\w+[\s\S]*?tab/gi,
-    ];
-    const tabLabels = new Set<string>();
-    const valueToMatchIndex = new Map<string, number>();
-    for (const pattern of tabValuePatterns) {
-      pattern.lastIndex = 0;
-      let match: RegExpExecArray | null;
-      while ((match = pattern.exec(content)) !== null) {
-        const raw = match[1]?.trim() ?? "";
-        if (raw.length > 0 && raw.length < 60) {
-          tabLabels.add(raw);
-          if (!valueToMatchIndex.has(raw)) {
-            valueToMatchIndex.set(raw, match.index);
-          }
-        }
-      }
-    }
-    if (tabLabels.size === 0) return;
-    let index = 0;
-    tabLabels.forEach((value) => {
-      const stateKey = `tab:${value}`;
-      const id = `screen:tab:${file.path}:${index}`;
-      const explicitTab = getVisudevAttrInContext(
-        content,
-        valueToMatchIndex.get(value) ?? 0,
-        "data-visudev-tab",
-      );
-      const label = explicitTab != null
-        ? explicitTab.replace(/-/g, " ").replace(
-          /\b\w/g,
-          (c) => c.toUpperCase(),
-        )
-        : value.charAt(0).toUpperCase() + value.slice(1);
-      const tabScreen: Screen = {
-        id,
-        name: `Tab: ${label}`,
-        path: parentPath,
-        filePath: file.path,
-        type: "tab",
-        flows: [],
-        navigatesTo: [],
-        framework: "state",
-        parentPath,
-        parentScreenId: parentId,
-        stateKey,
-      };
-      screens.push(tabScreen);
-      if (parentId) {
-        const host = screens.find((s) => s.id === parentId);
-        if (host) {
-          const st: StateTarget = {
-            targetScreenId: id,
-            edgeType: "switch-tab",
-            trigger: { label },
-          };
-          host.stateTargets = host.stateTargets ?? [];
-          host.stateTargets.push(st);
-        }
-      }
-      index += 1;
-    });
+    this.stateTargetExtractor.extractModalsTabsAndDropdowns(screens, files);
   }
 }

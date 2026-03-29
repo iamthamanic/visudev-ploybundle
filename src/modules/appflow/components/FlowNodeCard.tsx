@@ -8,6 +8,7 @@ import { GripVertical, PanelTop, LayoutList, Menu, Loader2 } from "lucide-react"
 import type { CSSProperties } from "react";
 import clsx from "clsx";
 import type { Screen } from "../../../lib/visudev/types";
+import type { FlowNodeAnalysisBadge } from "../services/analysis-status";
 import type { VisudevDomReport } from "../types";
 import styles from "../styles/LiveFlowCanvas.module.css";
 
@@ -31,6 +32,7 @@ interface FlowNodeCardProps {
   registerIframe: (win: Window, screenId: string) => void;
   nodeWidth: number;
   nodeHeight: number;
+  analysisBadge?: FlowNodeAnalysisBadge;
   isFocused?: boolean;
   isDimmed?: boolean;
   /** Called when user starts dragging this card (mousedown on handle). Pass clientX, clientY for delta calculation. */
@@ -49,6 +51,7 @@ export function FlowNodeCard({
   registerIframe,
   nodeWidth,
   nodeHeight,
+  analysisBadge,
   isFocused = false,
   isDimmed = false,
   onDragHandleMouseDown,
@@ -92,12 +95,29 @@ export function FlowNodeCard({
         )}
         {screen.name}
         {screen.path ? ` · ${screen.path}` : ""}
+        {analysisBadge && (
+          <span
+            className={clsx(
+              styles.nodeStatusBadge,
+              analysisBadge.tone === "verified" && styles.nodeStatusBadgeVerified,
+              analysisBadge.tone === "conflicted" && styles.nodeStatusBadgeConflicted,
+              analysisBadge.tone === "heuristic" && styles.nodeStatusBadgeHeuristic,
+              analysisBadge.tone === "deterministic" && styles.nodeStatusBadgeDeterministic,
+            )}
+            title={analysisBadge.title}
+          >
+            {analysisBadge.label}
+          </span>
+        )}
         <span className={styles.nodeDock} aria-hidden="true" />
       </div>
       {domReport && (
         <div className={styles.nodeLiveReport} title="Live-Daten von der App">
           Live: {domReport.route}
           {domReport.buttons != null && ` · ${domReport.buttons.length} Buttons`}
+          {domReport.interactiveElements != null &&
+            ` · ${domReport.interactiveElements.length} Interactions`}
+          {domReport.containers != null && ` · ${domReport.containers.length} Containers`}
         </div>
       )}
       {isStateNode ? (
@@ -124,6 +144,11 @@ export function FlowNodeCard({
             </>
           )}
           <span className={styles.nodeStateName}>{screen.name}</span>
+          {!screen.screenshotUrl && screen.stateKey && screen.stateKey !== screen.name && (
+            <span className={styles.nodeStateKey} title="State-Key">
+              {screen.stateKey}
+            </span>
+          )}
         </div>
       ) : loadState === "failed" ? (
         <div

@@ -1,0 +1,17 @@
+{
+  "name": "visudev-logs-runner",
+  "version": "1.0.0",
+  "description": "VisuDEV Logs Runner: OTLP/log ingest and health for Logs tab. Started with npm run dev.",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "visudev-logs-runner": "index.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

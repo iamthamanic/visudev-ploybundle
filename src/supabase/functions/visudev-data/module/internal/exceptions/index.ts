@@ -36,6 +36,13 @@ export class NotFoundException extends ModuleException {
   }
 }
 
+export class ForbiddenException extends ModuleException {
+  constructor(message: string = "Not authorized to access this resource") {
+    super(message, 403, "FORBIDDEN");
+    this.name = "ForbiddenException";
+  }
+}
+
 export class RepositoryException extends ModuleException {
   constructor(message: string) {
     super(message, 500, "REPOSITORY_ERROR");

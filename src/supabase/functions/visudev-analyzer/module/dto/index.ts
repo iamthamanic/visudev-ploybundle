@@ -1,6 +1,7 @@
 export * from "./analysis/analysis-request.dto.ts";
 export * from "./analysis/analysis-result.dto.ts";
 export * from "./analysis/analysis-record.dto.ts";
+export * from "./analysis/analysis-graph.dto.ts";
 export * from "./flow/code-flow.dto.ts";
 export * from "./framework/framework-detection.dto.ts";
 export * from "./screen/screen.dto.ts";

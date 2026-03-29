@@ -1,3 +1,4 @@
+import type { AnalysisGraph, AnalysisQuality } from "./analysis-graph";
 import type { Flow, Screen } from "./types";
 
 export interface AnalyzerFramework {
@@ -12,6 +13,8 @@ export interface AnalyzerPayload {
   screens: Screen[];
   flows: Flow[];
   framework?: AnalyzerFramework;
+  graph?: AnalysisGraph;
+  quality?: AnalysisQuality;
 }
 
 export interface AnalyzerResponse {

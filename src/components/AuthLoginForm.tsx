@@ -3,11 +3,12 @@
  * Ort: src/components/AuthLoginForm.tsx
  */
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { useAuth } from "../contexts/useAuth";
+import { getDevDemoAuthCredentials } from "../utils/devDemoAuth";
 import styles from "./AuthForms.module.css";
 
 interface AuthLoginFormProps {
@@ -17,7 +18,8 @@ interface AuthLoginFormProps {
 
 export function AuthLoginForm({ onSuccess, onSwitchToSignup }: AuthLoginFormProps) {
   const { signInWithPassword } = useAuth();
-  const [email, setEmail] = useState("");
+  const demoCreds = useMemo(() => getDevDemoAuthCredentials(), []);
+  const [email, setEmail] = useState(demoCreds?.email ?? "");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -40,6 +42,22 @@ export function AuthLoginForm({ onSuccess, onSwitchToSignup }: AuthLoginFormProp
           ? " Bei lokalem Supabase: Erst „Konto erstellen“ verwenden (Cloud-Nutzer existieren lokal nicht)."
           : "";
       setError(err.message + hint);
+      return;
+    }
+    onSuccess?.();
+  }
+
+  async function handleDemoLogin() {
+    if (!demoCreds) return;
+    setError(null);
+    setLoading(true);
+    const { error: err } = await signInWithPassword(demoCreds.email, demoCreds.password);
+    setLoading(false);
+    if (err) {
+      setError(
+        err.message +
+          " (Demo-Account muss in Supabase existieren — einmal „Konto erstellen“ oder im Dashboard anlegen.)",
+      );
       return;
     }
     onSuccess?.();
@@ -76,6 +94,11 @@ export function AuthLoginForm({ onSuccess, onSwitchToSignup }: AuthLoginFormProp
         <Button type="submit" disabled={loading}>
           {loading ? "Wird angemeldet…" : "Anmelden"}
         </Button>
+        {demoCreds && (
+          <Button type="button" variant="outline" disabled={loading} onClick={handleDemoLogin}>
+            Als Demo anmelden
+          </Button>
+        )}
         {onSwitchToSignup && (
           <Button type="button" variant="ghost" onClick={onSwitchToSignup}>
             Konto erstellen

@@ -10,6 +10,7 @@ import { AnalysisRepository } from "../internal/repositories/analysis.repository
 import { NotFoundException } from "../internal/exceptions/index.ts";
 import { FlowService } from "./flow.service.ts";
 import { GitHubService } from "./github.service.ts";
+import { GraphService } from "./graph.service.ts";
 import { ScreenService } from "./screen.service.ts";
 
 export class AnalysisService extends BaseService {
@@ -18,6 +19,7 @@ export class AnalysisService extends BaseService {
     private readonly gitHubService: GitHubService,
     private readonly flowService: FlowService,
     private readonly screenService: ScreenService,
+    private readonly graphService: GraphService,
   ) {
     super();
   }
@@ -114,6 +116,12 @@ export class AnalysisService extends BaseService {
       allFlows,
       commitSha,
     );
+    const { graph, quality } = this.graphService.buildGraph(
+      mappedScreens,
+      allFlows,
+      framework,
+      commitSha,
+    );
 
     const analysisId = crypto.randomUUID();
     const record: AnalysisRecord = {
@@ -126,6 +134,8 @@ export class AnalysisService extends BaseService {
       screens: mappedScreens,
       flows: allFlows,
       framework,
+      graph,
+      quality,
     };
 
     await this.repository.saveAnalysis(analysisId, record);
@@ -136,6 +146,8 @@ export class AnalysisService extends BaseService {
       screens: mappedScreens,
       flows: allFlows,
       framework,
+      graph,
+      quality,
     };
   }
 

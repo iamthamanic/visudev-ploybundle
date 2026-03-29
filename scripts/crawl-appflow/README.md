@@ -1,28 +1,28 @@
 # App Flow Runtime-Crawl (B1)
 
-Stub und Erweiterungspunkt für den Runtime-Crawl des App Flows.
+Erste lokale Runtime-Crawl-Implementierung für den App Flow.
 
 ## Vertrag (Ein-/Ausgabe)
 
 - **Eingabe:** `baseUrl`, Liste der Screens (path, type, id); optional Projekt-Kontext.
 - **Ausgabe:** Pro State-Screen (modal, tab) optional eine `screenshotUrl`; optional verifizierte Kanten mit Trigger-Metadaten.
 
-## Geplante Erweiterung
+## Aktueller Stand
 
-Ein Playwright-Skript (z. B. `crawl.mjs`) kann hier ergänzt werden, das:
+`crawl.mjs` nutzt Playwright und:
 
 1. Jede Route (baseUrl + screen.path) lädt
-2. Klickbare Elemente ermittelt und Safe-Clicks ausführt
-3. Bei URL-Wechsel Navigate-Kanten bestätigt; bei State-Change (Modal/Tab) Screenshots erzeugt und den zugehörigen Screen-Objekten zuordnet
-4. Screenshot-URLs (z. B. nach Upload in Storage) zurückgibt
+2. Sichere klickbare Elemente auswählt
+3. Bei URL-Wechsel Navigate-Kanten bestätigt
+4. Bei State-Change Modal/Tab/Dropdown per Screenshot erfasst
+5. Ein JSON-Ergebnis mit `verifiedEdges`, `stateScreens`, `snapshots` und `issues` zurückgibt
 
-Siehe **docs/APPFLOW_RUNTIME_CRAWL.md** für den genauen Ablauf und **docs/APPFLOW_GAP_AND_TARGET.md** (B1) für den Gesamtkontext.
+Zusätzlich kann der lokale Preview Runner denselben Crawl über `POST /crawl/:runId` ausführen.
 
-## Ausführung (nach Implementierung)
+## Ausführung
 
 ```bash
-# Beispiel (wenn crawl.mjs existiert):
-node scripts/crawl-appflow/crawl.mjs --baseUrl "http://localhost:5173" --screens '[...]'
+npm run crawl:appflow -- --baseUrl "http://localhost:5173" --screens '[{"id":"screen:projects","name":"Projects","path":"/projects","type":"page"}]'
 ```
 
-Die Appflow-UI zeigt Thumbnails für Modal/Tab/Dropdown bereits an, sobald `screenshotUrl` auf dem Screen gesetzt ist (z. B. aus Crawl-Ergebnis).
+Die Appflow-UI kann die zurückgegebenen `screenshotUrl`-Data-URLs direkt als Thumbnail für Modal/Tab/Dropdown verwenden.

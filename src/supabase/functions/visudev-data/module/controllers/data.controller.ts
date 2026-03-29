@@ -10,6 +10,7 @@ import type {
 } from "../dto/index.ts";
 import { ValidationException } from "../internal/exceptions/index.ts";
 import { DataService } from "../services/data.service.ts";
+import type { DataModuleConfig } from "../interfaces/module.interface.ts";
 import {
   erdBodySchema,
   migrationsBodySchema,
@@ -23,16 +24,27 @@ interface SuccessResponse<T> {
 }
 
 export class DataController {
-  constructor(private readonly service: DataService) {}
+  constructor(
+    private readonly service: DataService,
+    private readonly moduleConfig: DataModuleConfig,
+  ) {}
+
+  /** IDOR: assert project access when handler is project-scoped (optional, set by entrypoint). */
+  private async guardProject(c: Context, projectId: string): Promise<void> {
+    const assert = this.moduleConfig.assertProjectAccess;
+    if (assert) await assert(projectId, c);
+  }
 
   public async getSchema(c: Context): Promise<Response> {
     const projectId = this.parseProjectId(c);
+    await this.guardProject(c, projectId);
     const data = await this.service.getSchema(projectId);
     return this.ok<SchemaResponseDto>(c, data);
   }
 
   public async updateSchema(c: Context): Promise<Response> {
     const projectId = this.parseProjectId(c);
+    await this.guardProject(c, projectId);
     const body = await this.parseBody<UpdateSchemaDto>(c, schemaBodySchema);
     const data = await this.service.updateSchema(projectId, body);
     return this.ok<SchemaResponseDto>(c, data);
@@ -40,12 +52,14 @@ export class DataController {
 
   public async getMigrations(c: Context): Promise<Response> {
     const projectId = this.parseProjectId(c);
+    await this.guardProject(c, projectId);
     const data = await this.service.getMigrations(projectId);
     return this.ok<MigrationsResponseDto>(c, data);
   }
 
   public async updateMigrations(c: Context): Promise<Response> {
     const projectId = this.parseProjectId(c);
+    await this.guardProject(c, projectId);
     const body = await this.parseBody<UpdateMigrationsDto>(
       c,
       migrationsBodySchema,
@@ -56,20 +70,23 @@ export class DataController {
 
   public async getErd(c: Context): Promise<Response> {
     const projectId = this.parseProjectId(c);
+    await this.guardProject(c, projectId);
     const data = await this.service.getErd(projectId);
     return this.ok<ErdResponseDto>(c, data);
   }
 
   public async updateErd(c: Context): Promise<Response> {
     const projectId = this.parseProjectId(c);
+    await this.guardProject(c, projectId);
     const body = await this.parseBody<UpdateErdDto>(c, erdBodySchema);
     const data = await this.service.updateErd(projectId, body);
     return this.ok<ErdResponseDto>(c, data);
   }
 
-  /** Sync ERD from project's connected Supabase DB (integrations). No body. */
+  /** Sync ERD from project's connected Supabase DB (integrations). No body. IDOR: guardProject enforces access. */
   public async syncErd(c: Context): Promise<Response> {
     const projectId = this.parseProjectId(c);
+    await this.guardProject(c, projectId);
     const data = await this.service.syncErdFromSupabase(projectId);
     return this.ok<ErdResponseDto>(c, data);
   }

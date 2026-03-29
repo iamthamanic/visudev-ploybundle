@@ -53,12 +53,20 @@ export function usePreviewPostMessage(
           console.debug("[VisuDEV dom-report]", {
             sourceScreenId: sourceScreenId ?? "(no mapping)",
             navItemsCount: report.navItems?.length ?? 0,
+            interactiveCount: report.interactiveElements?.length ?? 0,
+            containerCount: report.containers?.length ?? 0,
           });
         }
-        if (!sourceScreenId) return;
-        const sourceScreen = screens.find((screen) => screen.id === sourceScreenId);
-        markScreenLoaded(sourceScreenId, sourceScreen?.name, "dom-report");
-        setDomReportsByScreenId((prev) => ({ ...prev, [sourceScreenId]: report }));
+        if (sourceScreenId) {
+          const sourceScreen = screens.find((screen) => screen.id === sourceScreenId);
+          markScreenLoaded(sourceScreenId, sourceScreen?.name, "dom-report");
+        }
+        setDomReportsByScreenId((prev) => {
+          const next = { ...prev };
+          if (sourceScreenId) next[sourceScreenId] = report;
+          if (report.navItems?.length) next.__nav_fallback = report;
+          return next;
+        });
         return;
       }
 

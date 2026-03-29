@@ -33,8 +33,9 @@ Starts the runner on port 4000 (override with `PORT=4001 npx visudev-runner`).
 - `GET /status/:runId` – status and `previewUrl`
 - `POST /stop/:runId` – stop and free port
 - `POST /stop-project/:projectId` – stop all runs for one project
+- `POST /crawl/:runId` – run a Playwright-based runtime crawl against the ready preview URL (body: minimal `screens[]`)
 
-**Security:** All access to runs is enforced server-side. `GET /status/:runId`, `POST /stop/:runId`, and `POST /stop-project/:projectId` require the `x-visudev-project-token` header (issued on `/start`); invalid or missing token returns 401/403. Write endpoints are rate-limited per client IP (env: `RUNNER_WRITE_RATE_LIMIT_WINDOW_MS`, `RUNNER_WRITE_RATE_LIMIT_MAX`).
+**Security:** All access to runs is enforced server-side. `GET /status/:runId`, `POST /stop/:runId`, `POST /stop-project/:projectId`, and `POST /crawl/:runId` require the `x-visudev-project-token` header (issued on `/start`); invalid or missing token returns 401/403. Write endpoints are rate-limited per client IP (env: `RUNNER_WRITE_RATE_LIMIT_WINDOW_MS`, `RUNNER_WRITE_RATE_LIMIT_MAX`).
 
 - `POST /refresh` – pull, rebuild, restart for a run
 - `GET /health` – health check

@@ -663,6 +663,10 @@ export function AppFlowPage({ projectId, githubRepo, githubBranch }: AppFlowPage
               }
               refreshInProgress={preview.projectId === projectId && preview.status === "starting"}
               refreshLogs={preview.projectId === projectId ? preview.refreshLogs : undefined}
+              analysisGraph={activeProject.analysisGraph}
+              analysisQuality={activeProject.analysisQuality}
+              analysisRuntime={activeProject.analysisRuntime}
+              analysisEscalations={activeProject.analysisEscalations}
             />
           </div>
         ) : (

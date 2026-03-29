@@ -1,0 +1,337 @@
+/**
+ * RunnersTopBar: Top-Leiste mit allen Runner-Statusen (Preview Runner, Logs Runner).
+ * Gleiche Zustände wie zuvor in Sidebar/LogsPage: checking, online, offline, warning.
+ */
+
+.root {
+  align-items: center;
+  background-color: var(--color-card);
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  flex-shrink: 0;
+  gap: 1rem;
+  padding: 0.5rem 1rem;
+}
+
+.runners {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.pill {
+  align-items: flex-start;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  display: flex;
+  gap: 0.5rem;
+  min-height: 40px;
+  padding: 0.4rem 0.75rem;
+  position: relative;
+}
+
+.pillDot {
+  border-radius: 9999px;
+  flex-shrink: 0;
+  height: 8px;
+  margin-top: 0.35rem;
+  width: 8px;
+}
+
+.pillText {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.pillPrimary {
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.pillSecondary {
+  font-size: 0.6875rem;
+  line-height: 1.2;
+  word-break: break-word;
+}
+
+/* States (gleich wie Sidebar Runner) */
+.pillChecking .pillDot,
+.pillNeutral .pillDot {
+  background-color: var(--color-muted-foreground);
+}
+
+.pillChecking,
+.pillNeutral {
+  background-color: var(--color-hover);
+  border-color: var(--color-border);
+}
+
+.pillChecking .pillPrimary,
+.pillNeutral .pillPrimary {
+  color: var(--color-foreground);
+}
+
+.pillChecking .pillSecondary,
+.pillNeutral .pillSecondary {
+  color: var(--color-muted-foreground);
+}
+
+.pillOnline {
+  background-color: color-mix(in srgb, var(--color-primary) 10%, transparent);
+  border-color: color-mix(in srgb, var(--color-primary) 35%, transparent);
+}
+
+.pillOnline .pillDot {
+  background-color: var(--color-primary);
+}
+
+.pillOnline .pillPrimary {
+  color: var(--color-foreground);
+}
+
+.pillOnline .pillSecondary {
+  color: var(--color-muted-foreground);
+}
+
+.pillOffline {
+  background-color: color-mix(in srgb, var(--color-danger) 10%, transparent);
+  border-color: color-mix(in srgb, var(--color-danger) 35%, transparent);
+}
+
+.pillOffline .pillDot {
+  background-color: var(--color-danger);
+}
+
+.pillOffline .pillPrimary {
+  color: var(--color-foreground);
+}
+
+.pillOffline .pillSecondary {
+  color: var(--color-muted-foreground);
+}
+
+.pillWarning {
+  background-color: color-mix(in srgb, var(--color-warning) 12%, transparent);
+  border-color: color-mix(in srgb, var(--color-warning) 35%, transparent);
+}
+
+.pillWarning .pillDot {
+  background-color: var(--color-warning);
+}
+
+.pillWarning .pillPrimary {
+  color: var(--color-foreground);
+}
+
+.pillWarning .pillSecondary {
+  color: var(--color-muted-foreground);
+}
+
+.runsButton {
+  align-items: center;
+  background-color: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-muted-foreground);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 0.7rem;
+  gap: 0.25rem;
+  margin-left: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  transition:
+    color 0.2s ease,
+    border-color 0.2s ease,
+    background-color 0.2s ease;
+}
+
+.runsButton:hover {
+  background-color: var(--color-hover);
+  border-color: color-mix(in srgb, var(--color-primary) 45%, transparent);
+  color: var(--color-foreground);
+}
+
+.runsButtonIcon {
+  height: 0.8rem;
+  width: 0.8rem;
+}
+
+/* Dialog (Preview Runner Runs) – gleiche Semantik wie Sidebar */
+.runnerDialogContent {
+  border-color: var(--color-border);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 2rem);
+  max-width: 860px;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.runnerDialogToolbar {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.runnerDialogButton {
+  align-items: center;
+  background-color: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-muted-foreground);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 0.8125rem;
+  gap: 0.35rem;
+  padding: 0.35rem 0.6rem;
+  transition:
+    color 0.2s ease,
+    border-color 0.2s ease,
+    background-color 0.2s ease;
+}
+
+.runnerDialogButton:hover:not(:disabled) {
+  background-color: var(--color-hover);
+  border-color: color-mix(in srgb, var(--color-primary) 45%, var(--color-border));
+  color: var(--color-foreground);
+}
+
+.runnerDialogButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.runnerDialogButtonIcon {
+  height: 0.9rem;
+  width: 0.9rem;
+}
+
+.runnerDialogStats {
+  background-color: color-mix(in srgb, var(--color-primary) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 24%, transparent);
+  border-radius: var(--radius-sm);
+  color: var(--color-muted-foreground);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.75rem;
+  gap: 0.35rem 0.65rem;
+  margin-top: 0.25rem;
+  padding: 0.4rem 0.55rem;
+}
+
+.runnerRunsList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin-top: 0.35rem;
+  padding-right: 0.15rem;
+}
+
+.runnerRunCard {
+  background-color: color-mix(in srgb, var(--color-background) 92%, var(--color-primary) 8%);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.55rem 0.65rem;
+}
+
+.runnerRunHeader {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+  justify-content: space-between;
+}
+
+.runnerRunId {
+  color: var(--color-foreground);
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
+    monospace;
+  font-size: 0.74rem;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runnerRunStatus {
+  border: 1px solid var(--color-border);
+  border-radius: 9999px;
+  color: var(--color-muted-foreground);
+  display: inline-flex;
+  font-size: 0.67rem;
+  font-weight: 600;
+  line-height: 1;
+  padding: 0.22rem 0.45rem;
+  text-transform: uppercase;
+}
+
+.runnerRunStatusReady {
+  background-color: color-mix(in srgb, var(--color-primary) 14%, transparent);
+  border-color: color-mix(in srgb, var(--color-primary) 45%, transparent);
+  color: var(--color-primary);
+}
+
+.runnerRunStatusStarting {
+  background-color: color-mix(in srgb, var(--color-warning) 14%, transparent);
+  border-color: color-mix(in srgb, var(--color-warning) 45%, transparent);
+  color: var(--color-warning);
+}
+
+.runnerRunStatusFailed {
+  background-color: color-mix(in srgb, var(--color-danger) 14%, transparent);
+  border-color: color-mix(in srgb, var(--color-danger) 40%, transparent);
+  color: var(--color-danger);
+}
+
+.runnerRunStatusStopped {
+  background-color: color-mix(in srgb, var(--color-muted-foreground) 18%, transparent);
+  border-color: color-mix(in srgb, var(--color-muted-foreground) 38%, transparent);
+  color: var(--color-muted-foreground);
+}
+
+.runnerRunMeta {
+  color: var(--color-muted-foreground);
+  display: grid;
+  font-size: 0.73rem;
+  gap: 0.2rem;
+}
+
+.runnerDialogEmpty {
+  align-items: center;
+  color: var(--color-muted-foreground);
+  display: flex;
+  font-size: 0.83rem;
+  gap: 0.35rem;
+  min-height: 68px;
+}
+
+.runnerDialogError {
+  background-color: color-mix(in srgb, var(--color-danger) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-danger) 30%, transparent);
+  border-radius: var(--radius-sm);
+  color: color-mix(in srgb, var(--color-danger) 88%, white);
+  font-size: 0.8rem;
+  line-height: 1.35;
+  padding: 0.55rem 0.65rem;
+}
+
+.spin {
+  animation: runnerSpin 0.9s linear infinite;
+}
+
+@keyframes runnerSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}

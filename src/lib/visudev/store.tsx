@@ -9,6 +9,8 @@ import React, {
   useEffect,
 } from "react";
 import type { AnalyzerResponse, AnalyzerScreenshotsResponse } from "./analyzer";
+import { buildEscalationJobs } from "./escalation-jobs";
+import { mergeRuntimeIntoAnalysis } from "./runtime-crawl";
 import {
   AnalysisResult,
   Project,
@@ -90,6 +92,31 @@ function apiErrorMsg(err: unknown): string {
   if (err && typeof err === "object" && "message" in err)
     return String((err as { message: unknown }).message);
   return "Request failed";
+}
+
+function applyRuntimeScreenshots(
+  screens: Screen[],
+  captures: Project["analysisRuntime"],
+): Screen[] {
+  const captureByScreenId = new Map(
+    (captures?.stateScreens ?? [])
+      .filter((capture) => capture.screenId && capture.screenshotUrl)
+      .map((capture) => [capture.screenId as string, capture.screenshotUrl as string]),
+  );
+  if (captureByScreenId.size === 0) {
+    return screens;
+  }
+  return screens.map((screen) => {
+    const screenshotUrl = captureByScreenId.get(screen.id);
+    if (!screenshotUrl) {
+      return screen;
+    }
+    return {
+      ...screen,
+      screenshotUrl,
+      screenshotStatus: "ok",
+    };
+  });
 }
 
 export function VisudevProvider({ children }: { children: ReactNode }) {
@@ -311,6 +338,10 @@ export function VisudevProvider({ children }: { children: ReactNode }) {
 
           // Step: Capture screenshots for all detected screens
           let screensWithScreenshots: Screen[] = analysisData.data.screens || [];
+          let graph = analysisData.data.graph;
+          let quality = analysisData.data.quality;
+          let runtime = undefined;
+          let escalations = buildEscalationJobs(graph, runtime);
 
           const getPlaceholderUrl = (screen: Screen) =>
             `https://placehold.co/1200x800/1a1a1a/03ffa3?text=${encodeURIComponent(screen.name)}`;
@@ -412,10 +443,60 @@ export function VisudevProvider({ children }: { children: ReactNode }) {
             }
           }
 
+          if (screensWithScreenshots.length > 0 && activeProject.preview_mode !== "deployed") {
+            appendScanLog(
+              `Runtime-Crawl angefragt (${Math.min(screensWithScreenshots.length, 8)} Route-Screen(s)).`,
+              "info",
+            );
+            const crawlResponse = await previewAPI.crawl(
+              activeProject.id,
+              {
+                screens: screensWithScreenshots.map((screen) => ({
+                  id: screen.id,
+                  name: screen.name,
+                  path: screen.path,
+                  type: screen.type,
+                  parentScreenId: screen.parentScreenId,
+                  parentPath: screen.parentPath,
+                  stateKey: screen.stateKey,
+                })),
+                maxScreens: 8,
+                maxClicksPerScreen: 4,
+              },
+              activeProject.preview_mode,
+            );
+            if (crawlResponse.success && crawlResponse.data) {
+              runtime = crawlResponse.data;
+              screensWithScreenshots = applyRuntimeScreenshots(screensWithScreenshots, runtime);
+              const merged = mergeRuntimeIntoAnalysis(graph, quality, runtime);
+              graph = merged.graph;
+              quality = merged.quality;
+              escalations = buildEscalationJobs(graph, runtime);
+              appendScanLog(
+                `Runtime-Crawl abgeschlossen: ${runtime.summary.verifiedEdges} verifizierte Kanten, ${runtime.summary.stateCaptures} State-Captures.`,
+                "success",
+              );
+              if (runtime.summary.mismatchCount > 0) {
+                appendScanLog(
+                  `Runtime-Crawl meldet ${runtime.summary.mismatchCount} Abweichung(en) zwischen DOM und Graph.`,
+                  "info",
+                );
+              }
+            } else if (crawlResponse.error) {
+              appendScanLog(`Runtime-Crawl übersprungen: ${crawlResponse.error}`, "info");
+            }
+          }
+
+          escalations = buildEscalationJobs(graph, runtime);
+
           // Transform analyzer result into AnalysisResult
           const result: AnalysisResult = {
             screens: screensWithScreenshots,
             flows: analysisData.data.flows || activeProject.flows,
+            graph,
+            quality,
+            runtime,
+            escalations,
             stats: {
               totalScreens: screensWithScreenshots.length,
               totalFlows: (analysisData.data.flows || activeProject.flows).length,
@@ -430,6 +511,10 @@ export function VisudevProvider({ children }: { children: ReactNode }) {
             flows: result.flows,
             lastAnalyzedCommitSha:
               analysisData.data.commitSha ?? activeProject.lastAnalyzedCommitSha,
+            analysisGraph: graph,
+            analysisQuality: quality,
+            analysisRuntime: runtime,
+            analysisEscalations: escalations,
           };
 
           updateProject(updatedProject);

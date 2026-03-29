@@ -7,6 +7,7 @@
  */
 
 import { useMemo } from "react";
+import type { FlowEdgeAnalysisMeta } from "../services/analysis-status";
 import type { GraphEdge } from "../layout";
 import type { NodePosition } from "../layout";
 import type { VisudevDomReport, VisudevNavItem } from "../types";
@@ -121,6 +122,7 @@ interface FlowEdgesLayerProps {
   fallbackDomReport?: VisudevDomReport | null;
   /** Edge key (fromId-toId) of the clicked edge; only this edge is drawn green, others gray. */
   selectedEdgeKey?: string | null;
+  edgeMetaByKey?: Record<string, FlowEdgeAnalysisMeta>;
   onEdgeClick: (edge: GraphEdge) => void;
 }
 
@@ -136,6 +138,7 @@ export function FlowEdgesLayer({
   domReports,
   fallbackDomReport = null,
   selectedEdgeKey = null,
+  edgeMetaByKey,
   onEdgeClick,
 }: FlowEdgesLayerProps): React.ReactElement {
   const anchorRanks = useNavigateAnchorRanks(edges);
@@ -154,9 +157,12 @@ export function FlowEdgesLayer({
     ) {
       if (edge.type === "navigate") {
         const reportFromId = domReports?.[edge.fromId];
-        const navItemFromSource = findNavItemForTarget(reportFromId?.navItems, edge.targetPath);
-        if (navItemFromSource) {
-          const r = navItemFromSource.rect;
+        let navItem = findNavItemForTarget(reportFromId?.navItems, edge.targetPath);
+        if (!navItem && fallbackDomReport?.navItems?.length) {
+          navItem = findNavItemForTarget(fallbackDomReport.navItems, edge.targetPath);
+        }
+        if (navItem) {
+          const r = navItem.rect;
           x1 = fromPos.x + (r.x + r.width) * NODE_IFRAME_SCALE;
           y1 = fromPos.y + LABEL_HEIGHT + (r.y + r.height / 2) * NODE_IFRAME_SCALE;
         } else {
@@ -215,6 +221,26 @@ export function FlowEdgesLayer({
             <polygon className={styles.arrowNavSelected} points="0 0, 8 4, 0 8" />
           </marker>
           <marker
+            id="live-arrow-nav-verified"
+            markerWidth="8"
+            markerHeight="8"
+            refX="7"
+            refY="4"
+            orient="auto"
+          >
+            <polygon className={styles.arrowNavVerified} points="0 0, 8 4, 0 8" />
+          </marker>
+          <marker
+            id="live-arrow-nav-conflict"
+            markerWidth="8"
+            markerHeight="8"
+            refX="7"
+            refY="4"
+            orient="auto"
+          >
+            <polygon className={styles.arrowNavConflict} points="0 0, 8 4, 0 8" />
+          </marker>
+          <marker
             id="live-arrow-call"
             markerWidth="8"
             markerHeight="8"
@@ -236,15 +262,24 @@ export function FlowEdgesLayer({
               edge.type === "open-modal" ||
               edge.type === "switch-tab" ||
               edge.type === "dropdown-action";
+            const edgeMeta = edgeMetaByKey?.[edgeKey];
             const navClass = isNavLike
               ? isSelected
                 ? styles.edgeNavSelected
-                : styles.edgeNavDefault
+                : edgeMeta?.isConflicted
+                  ? styles.edgeNavConflict
+                  : edgeMeta?.isVerified
+                    ? styles.edgeNavVerified
+                    : styles.edgeNavDefault
               : styles.edgeCall;
             const navMarker = isNavLike
               ? isSelected
                 ? "url(#live-arrow-nav-selected)"
-                : "url(#live-arrow-nav)"
+                : edgeMeta?.isConflicted
+                  ? "url(#live-arrow-nav-conflict)"
+                  : edgeMeta?.isVerified
+                    ? "url(#live-arrow-nav-verified)"
+                    : "url(#live-arrow-nav)"
               : "url(#live-arrow-call)";
             const triggerLabel =
               edge.type === "open-modal" ||
@@ -261,7 +296,11 @@ export function FlowEdgesLayer({
                         ? "Tab: "
                         : "Dropdown: "
                   }${triggerLabel}`
-                : undefined;
+                : edgeMeta?.title;
+            const fullTitle =
+              edgeMeta?.title && title && edgeMeta.title !== title
+                ? `${title} · ${edgeMeta.title}`
+                : (title ?? edgeMeta?.title);
             return (
               <path
                 key={`${edge.fromId}-${edge.toId}-${i}`}
@@ -269,9 +308,9 @@ export function FlowEdgesLayer({
                 d={rendered.pathD}
                 className={navClass}
                 markerEnd={navMarker}
-                aria-label={title ?? undefined}
+                aria-label={fullTitle ?? undefined}
               >
-                {title != null ? <title>{title}</title> : null}
+                {fullTitle != null ? <title>{fullTitle}</title> : null}
               </path>
             );
           })}

@@ -15,8 +15,8 @@ export function createDataModule(config: DataModuleConfig): {
   initModuleServices(config);
 
   const repository = new DataRepository();
-  const service = new DataService(repository);
-  const controller = new DataController(service);
+  const service = new DataService(repository, config);
+  const controller = new DataController(service, config);
 
   return {
     registerRoutes: (app: Hono): void => registerDataRoutes(app, controller),

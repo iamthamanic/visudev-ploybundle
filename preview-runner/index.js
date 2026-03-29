@@ -2,7 +2,7 @@
 /**
  * VisuDEV Preview Runner
  *
- * API: POST /start, GET /status/:runId, POST /stop/:runId, POST /stop-project/:projectId, POST /refresh, POST /webhook/github
+ * API: POST /start, GET /status/:runId, POST /stop/:runId, POST /stop-project/:projectId, POST /refresh, POST /crawl/:runId, POST /webhook/github
  * Default: real build (clone, build, start app). Stub only with USE_STUB=1 or USE_REAL_BUILD=0.
  * Refresh: git pull + rebuild + restart so preview shows latest from repo (live).
  * GitHub Webhook: on push, auto-refresh matching preview (pull + rebuild + restart).
@@ -36,6 +36,7 @@ import {
   getContainerStatus,
   streamContainerLogs,
 } from "./docker.js";
+import { runRuntimeCrawl } from "./runtime-crawl.js";
 
 const PORT = Number(process.env.PORT) || 4000;
 /** Actual port the runner binds to (set after finding a free one). */
@@ -273,7 +274,7 @@ function buildProxyErrorPage(title, hint) {
   );
 }
 
-const VISUDEV_BRIDGE_SCRIPT = String.raw`<script data-visudev-preview-bridge="1">(function(){try{if(window.__visudevPreviewBridgeInstalled)return;window.__visudevPreviewBridgeInstalled=true;var lastRoute=null;var reportTimer=null;function normalizePath(path){var raw=String(path||"/");raw=raw.split("?")[0].split("#")[0]||"/";if(!raw.startsWith("/"))raw="/"+raw;raw=raw.replace(/\/{2,}/g,"/");if(raw.length>1&&raw.endsWith("/"))raw=raw.slice(0,-1);return raw||"/";}function post(payload){try{if(window.parent&&window.parent!==window){window.parent.postMessage(payload,"*");}}catch(_e){}}function collectButtons(){var nodes=document.querySelectorAll('button,[role="button"],a[href]');var out=[];for(var i=0;i<nodes.length&&i<60;i++){var el=nodes[i];var label=((el.getAttribute("aria-label")||el.textContent||"").trim());out.push({tagName:String(el.tagName||"").toLowerCase(),role:el.getAttribute("role")||undefined,label:label?label.slice(0,80):undefined});}return out;}function collectLinks(){var links=document.querySelectorAll("a[href]");var out=[];for(var i=0;i<links.length&&i<60;i++){var el=links[i];var href=el.getAttribute("href")||"";if(!href)continue;var text=(el.textContent||"").trim();out.push({href:href,text:text?text.slice(0,80):undefined});}return out;}function emitReport(){var route=normalizePath(window.location.pathname||"/");post({type:"visudev-dom-report",route:route,buttons:collectButtons(),links:collectLinks()});if(lastRoute!==null&&lastRoute!==route){post({type:"visudev-navigate",path:route});}lastRoute=route;}function queueReport(){if(reportTimer)window.clearTimeout(reportTimer);reportTimer=window.setTimeout(function(){reportTimer=null;emitReport();},120);}function wrapHistory(method){var original=history[method];if(typeof original!=="function")return;history[method]=function(){var result=original.apply(this,arguments);queueReport();return result;};}wrapHistory("pushState");wrapHistory("replaceState");window.addEventListener("popstate",queueReport);window.addEventListener("hashchange",queueReport);window.addEventListener("load",function(){queueReport();window.setTimeout(queueReport,600);window.setTimeout(queueReport,1800);});document.addEventListener("click",function(event){var target=event.target;if(!target||!target.closest)return;var anchor=target.closest("a[href]");if(!anchor)return;var href=anchor.getAttribute("href")||"";if(!href||href[0]==="#"||/^mailto:|^tel:|^javascript:/i.test(href))return;try{var url=new URL(href,window.location.href);if(url.origin!==window.location.origin)return;post({type:"visudev-navigate",path:normalizePath(url.pathname||"/")});}catch(_e){}},true);if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",queueReport,{once:true});}else{queueReport();}}catch(_err){}})();</script>`;
+const VISUDEV_BRIDGE_SCRIPT = String.raw`<script data-visudev-preview-bridge="1">(function(){try{if(window.__visudevPreviewBridgeInstalled)return;window.__visudevPreviewBridgeInstalled=true;var lastRoute=null;var reportTimer=null;var observer=null;function normalizePath(path){var raw=String(path||"/");raw=raw.split("?")[0].split("#")[0]||"/";raw=raw.replace(/^\/p\/\d+(?=\/|$)/,"")||"/";if(!raw.startsWith("/"))raw="/"+raw;raw=raw.replace(/\/{2,}/g,"/");if(raw.length>1&&raw.endsWith("/"))raw=raw.slice(0,-1);return raw||"/";}function normalizeText(value,max){var text=String(value||"").replace(/\s+/g," ").trim();if(!text)return undefined;return text.slice(0,max||80);}function post(payload){try{if(window.parent&&window.parent!==window){window.parent.postMessage(payload,"*");}}catch(_e){}}function safeRect(el){if(!el||typeof el.getBoundingClientRect!=="function")return undefined;var rect=el.getBoundingClientRect();if(!rect)return undefined;return{x:Math.round(rect.x),y:Math.round(rect.y),width:Math.round(rect.width),height:Math.round(rect.height)};}function isVisible(el){if(!el||typeof window.getComputedStyle!=="function")return false;var style=window.getComputedStyle(el);if(!style)return false;if(style.display==="none"||style.visibility==="hidden"||style.opacity==="0")return false;var rect=safeRect(el);return Boolean(rect&&rect.width>0&&rect.height>0);}function isEnabled(el){return !el.hasAttribute("disabled")&&el.getAttribute("aria-disabled")!=="true";}function isOpenState(el){var dataState=(el.getAttribute("data-state")||"").toLowerCase();if(dataState==="open")return true;if(dataState==="closed")return false;if(el.hasAttribute("open"))return true;if(el.getAttribute("aria-expanded")==="true")return true;if(el.getAttribute("aria-hidden")==="false")return true;return undefined;}function isActiveState(el){var dataState=(el.getAttribute("data-state")||"").toLowerCase();if(dataState==="active"||dataState==="selected"||dataState==="open")return true;if(el.getAttribute("aria-selected")==="true")return true;if(el.getAttribute("aria-current")&&el.getAttribute("aria-current")!=="false")return true;if(/\b(active|selected|current|open)\b/i.test(el.className||""))return true;return undefined;}function selectorFor(el){if(!el||!el.tagName)return undefined;var tag=String(el.tagName||"").toLowerCase();var id=normalizeText(el.id,60);if(id)return "#"+id.replace(/\s+/g,"-");var testId=normalizeText(el.getAttribute("data-testid")||el.getAttribute("data-test-id"),80);if(testId)return tag+'[data-testid="'+testId+'"]';var visudevScreen=normalizeText(el.getAttribute("data-visudev-screen"),80);if(visudevScreen)return tag+'[data-visudev-screen="'+visudevScreen+'"]';var visudevTrigger=normalizeText(el.getAttribute("data-visudev-trigger"),80);if(visudevTrigger)return tag+'[data-visudev-trigger="'+visudevTrigger+'"]';var name=normalizeText(el.getAttribute("name"),60);if(name)return tag+'[name="'+name+'"]';var ariaLabel=normalizeText(el.getAttribute("aria-label"),60);if(ariaLabel)return tag+'[aria-label="'+ariaLabel+'"]';var role=normalizeText(el.getAttribute("role"),40);if(role)return tag+'[role="'+role+'"]'; return tag;}function labelFor(el){return normalizeText(el.getAttribute("aria-label")||el.getAttribute("data-visudev-label")||el.textContent||el.getAttribute("title"),80);}function isInternalPath(href){if(!href||href[0]==="#"||/^mailto:|^tel:|^javascript:/i.test(href))return false;try{var url=new URL(href,window.location.href);return url.origin===window.location.origin;}catch(_e){return false;}}function containerTypeFor(el){var host=el.closest('[role="dialog"],[aria-modal="true"],[role="tablist"],[role="menu"],[role="listbox"],[data-visudev-modal],[data-visudev-tab],[data-visudev-dropdown],dialog');if(!host)return undefined;if(host.matches('[role="dialog"],[aria-modal="true"],dialog,[data-visudev-modal]'))return "dialog";if(host.matches('[role="tablist"],[data-visudev-tab]'))return "tablist";if(host.matches('[role="menu"],[data-visudev-dropdown]'))return "menu";if(host.matches('[role="listbox"]'))return "listbox";return undefined;}function collectButtons(){var nodes=document.querySelectorAll('button,[role="button"],a[href]');var out=[];for(var i=0;i<nodes.length&&i<60;i++){var el=nodes[i];out.push({tagName:String(el.tagName||"").toLowerCase(),role:el.getAttribute("role")||undefined,label:labelFor(el)});}return out;}function collectLinks(){var links=document.querySelectorAll("a[href]");var out=[];for(var i=0;i<links.length&&i<60;i++){var el=links[i];var href=el.getAttribute("href")||"";if(!href)continue;out.push({href:href,text:labelFor(el)});}return out;}function collectInteractiveElements(){var nodes=document.querySelectorAll('button,[role="button"],a[href],input:not([type="hidden"]),select,textarea,[role="tab"],[role="menuitem"],[data-visudev-trigger]');var out=[];for(var i=0;i<nodes.length&&i<80;i++){var el=nodes[i];var href=el.getAttribute("href")||undefined;var rect=safeRect(el);out.push({tagName:String(el.tagName||"").toLowerCase(),role:el.getAttribute("role")||undefined,label:labelFor(el),href:isInternalPath(href||"")?normalizePath(new URL(href,window.location.href).pathname||"/"):href||undefined,selector:selectorFor(el),testId:normalizeText(el.getAttribute("data-testid")||el.getAttribute("data-test-id"),80),visible:isVisible(el),enabled:isEnabled(el),active:isActiveState(el),open:isOpenState(el),containerType:containerTypeFor(el),rect:rect});}return out;}function collectContainers(){var nodes=document.querySelectorAll('[role="dialog"],[aria-modal="true"],dialog,[role="tablist"],[role="tabpanel"],[role="menu"],[role="listbox"],[data-visudev-modal],[data-visudev-tab],[data-visudev-dropdown],details');var out=[];for(var i=0;i<nodes.length&&i<40;i++){var el=nodes[i];var type="dialog";if(el.matches('[role="tablist"],[data-visudev-tab]'))type="tablist";else if(el.matches('[role="tabpanel"]'))type="tabpanel";else if(el.matches('[role="menu"],[data-visudev-dropdown]'))type="menu";else if(el.matches('[role="listbox"]'))type="listbox";else if(el.matches('details'))type="drawer";out.push({type:type,label:labelFor(el),selector:selectorFor(el),testId:normalizeText(el.getAttribute("data-testid")||el.getAttribute("data-test-id"),80),visible:isVisible(el),open:isOpenState(el),active:isActiveState(el),rect:safeRect(el)});}return out;}function collectNavItems(){var nodes=document.querySelectorAll('[data-nav-path],nav a[href],[role="navigation"] a[href],[role="tab"][data-nav-path],[role="tab"][href],[role="tab"][data-path],a[aria-current]');var out=[];var seen={};for(var i=0;i<nodes.length&&i<40;i++){var el=nodes[i];var rawPath=el.getAttribute("data-nav-path")||el.getAttribute("data-path")||el.getAttribute("href")||"";if(!rawPath)continue;if(!isInternalPath(rawPath)&&rawPath[0]!=="/")continue;var path=rawPath[0]==="/"?normalizePath(rawPath):normalizePath(new URL(rawPath,window.location.href).pathname||"/");if(seen[path])continue;var rect=safeRect(el);if(!rect)continue;seen[path]=true;out.push({path:path,label:labelFor(el),rect:rect});}return out;}function emitReport(){var route=normalizePath(window.location.pathname||"/");post({type:"visudev-dom-report",route:route,buttons:collectButtons(),links:collectLinks(),interactiveElements:collectInteractiveElements(),containers:collectContainers(),navItems:collectNavItems()});if(lastRoute!==null&&lastRoute!==route){post({type:"visudev-navigate",path:route});}lastRoute=route;}function queueReport(){if(reportTimer)window.clearTimeout(reportTimer);reportTimer=window.setTimeout(function(){reportTimer=null;emitReport();},120);}function wrapHistory(method){var original=history[method];if(typeof original!=="function")return;history[method]=function(){var result=original.apply(this,arguments);queueReport();return result;};}function installObserver(){if(typeof MutationObserver!=="function"||observer)return;observer=new MutationObserver(function(mutations){for(var i=0;i<mutations.length;i++){var mutation=mutations[i];if(mutation.type==="childList"){queueReport();return;}if(mutation.type==="attributes"){var attr=mutation.attributeName||"";if(/^(class|style|hidden|open|aria-hidden|aria-expanded|aria-selected|data-state)$/.test(attr)){queueReport();return;}}}});observer.observe(document.documentElement||document.body,{childList:true,subtree:true,attributes:true,attributeFilter:["class","style","hidden","open","aria-hidden","aria-expanded","aria-selected","data-state"]});}wrapHistory("pushState");wrapHistory("replaceState");window.addEventListener("popstate",queueReport);window.addEventListener("hashchange",queueReport);window.addEventListener("load",function(){queueReport();window.setTimeout(queueReport,600);window.setTimeout(queueReport,1800);installObserver();});document.addEventListener("click",function(event){var target=event.target;if(!target||!target.closest)return;var anchor=target.closest("a[href]");if(!anchor)return;var href=anchor.getAttribute("href")||"";if(!isInternalPath(href))return;try{var url=new URL(href,window.location.href);post({type:"visudev-navigate",path:normalizePath(url.pathname||"/")});}catch(_e){}queueReport();},true);document.addEventListener("change",queueReport,true);document.addEventListener("input",queueReport,true);if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",function(){queueReport();installObserver();},{once:true});}else{queueReport();installObserver();}}catch(_err){}})();</script>`;
 
 function injectVisudevBridge(html) {
   if (!html || html.includes("data-visudev-preview-bridge")) return html;
@@ -1948,6 +1949,11 @@ async function handleStart(req, res, _url) {
     injectSupabasePlaceholders: resolveInjectSupabasePlaceholders(
       requestedInjectSupabasePlaceholders,
     ),
+    crawlStatus: "idle",
+    crawlResult: null,
+    crawlError: null,
+    crawlStartedAt: null,
+    crawlFinishedAt: null,
   });
   const newRun = runs.get(runId);
   if (newRun) {
@@ -2010,6 +2016,9 @@ function handleStatus(req, res, url) {
     error: run.error ?? undefined,
     degraded: run.degraded === true,
     bootMode: run.bootMode ?? PREVIEW_BOOT_MODE_DEFAULT,
+    crawlStatus: run.crawlStatus ?? "idle",
+    crawlError: run.crawlError ?? undefined,
+    crawlSummary: run.crawlResult?.summary ?? undefined,
     startedAt: run.startedAt,
     readyAt: run.readyAt,
     logs: run.logs || [],
@@ -2261,6 +2270,55 @@ async function handleRefresh(req, res) {
   send(res, 200, { success: true, status: "starting" });
 }
 
+async function handleCrawl(req, res, url) {
+  const match = url.pathname.match(/^\/crawl\/([^/]+)$/);
+  const runId = match ? normalizeRunIdValue(decodeURIComponent(match[1])) : null;
+  if (!runId) {
+    send(res, 400, { success: false, error: "Invalid runId" });
+    return;
+  }
+
+  const run = runs.get(runId);
+  if (!run) {
+    send(res, 404, { success: false, error: "Run not found" });
+    return;
+  }
+
+  const access = ensureRunAccess(run, readProjectTokenFromRequest(req));
+  if (!access.ok) {
+    send(res, access.statusCode, { success: false, error: access.error });
+    return;
+  }
+  if (run.status !== "ready" || !run.previewUrl) {
+    send(res, 409, { success: false, error: "Preview run is not ready for crawling." });
+    return;
+  }
+
+  const body = await parseBody(req);
+  run.crawlStatus = "running";
+  run.crawlError = null;
+  run.crawlStartedAt = new Date().toISOString();
+  try {
+    const data = await runRuntimeCrawl({
+      baseUrl: body.baseUrl ?? run.previewUrl,
+      screens: Array.isArray(body.screens) ? body.screens : [],
+      maxScreens: Number(body.maxScreens) || 8,
+      maxClicksPerScreen: Number(body.maxClicksPerScreen) || 5,
+      logger: console,
+    });
+    run.crawlStatus = "completed";
+    run.crawlFinishedAt = new Date().toISOString();
+    run.crawlResult = data;
+    send(res, 200, { success: true, data });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    run.crawlStatus = "failed";
+    run.crawlFinishedAt = new Date().toISOString();
+    run.crawlError = message;
+    send(res, 500, { success: false, error: message });
+  }
+}
+
 /** GitHub Webhook: on push, find runs for repo+branch and auto-refresh (pull + rebuild + restart). */
 function handleWebhookGitHub(req, res, rawBody) {
   const sig = req.headers["x-hub-signature-256"];
@@ -2391,11 +2449,13 @@ const server = http.createServer(async (req, res) => {
       ? "/start"
       : req.method === "POST" && pathname === "/refresh"
         ? "/refresh"
-        : req.method === "POST" && pathname.startsWith("/stop-project/")
-          ? "/stop-project"
-          : req.method === "POST" && pathname.startsWith("/stop/")
-            ? "/stop"
-            : null;
+        : req.method === "POST" && pathname.startsWith("/crawl/")
+          ? "/crawl"
+          : req.method === "POST" && pathname.startsWith("/stop-project/")
+            ? "/stop-project"
+            : req.method === "POST" && pathname.startsWith("/stop/")
+              ? "/stop"
+              : null;
   if (writeRouteKey) {
     const rateLimit = enforceWriteRateLimit(req, writeRouteKey);
     if (!rateLimit.ok) {
@@ -2439,6 +2499,10 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "POST" && pathname === "/refresh") {
       await handleRefresh(req, res);
+      return;
+    }
+    if (req.method === "POST" && pathname.startsWith("/crawl/")) {
+      await handleCrawl(req, res, url);
       return;
     }
     send(res, 404, { error: "Not found" });

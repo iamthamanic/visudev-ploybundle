@@ -9,6 +9,7 @@ import type {
   IntegrationsUpdateInput,
   GitHubRepo,
 } from "../lib/visudev/integrations";
+import type { RuntimeCrawlResult } from "../lib/visudev/runtime-crawl";
 import type { PreviewMode, Project } from "../lib/visudev/types";
 import type {
   AppFlowCreateInput,
@@ -407,6 +408,133 @@ async function discoverRunnerUrl(): Promise<string | null> {
 /** URL für den lokalen Runner (env oder zuvor per Discovery gefunden). */
 function getEffectiveRunnerUrl(): string {
   return discoveredRunnerUrl ?? localRunnerUrl;
+}
+
+// ==================== LOGS RUNNER ====================
+
+const localLogsRunnerUrl =
+  (typeof import.meta !== "undefined" && import.meta.env?.VITE_LOGS_RUNNER_URL) ||
+  (typeof import.meta !== "undefined" && import.meta.env?.DEV ? "http://127.0.0.1:5000" : "") ||
+  "";
+
+let discoveredLogsRunnerUrl: string | null = null;
+
+const LOGS_RUNNER_PORT_CANDIDATES = [5000, 5010, 5020, 5030];
+
+async function checkLogsRunnerHealth(baseUrl: string): Promise<boolean> {
+  try {
+    const c = new AbortController();
+    const t = setTimeout(() => c.abort(), 1500);
+    const r = await fetch(`${baseUrl.replace(/\/$/, "")}/health`, {
+      method: "GET",
+      signal: c.signal,
+    });
+    clearTimeout(t);
+    return r.status === 200;
+  } catch {
+    return false;
+  }
+}
+
+async function discoverLogsRunnerUrl(): Promise<string | null> {
+  const hosts = ["localhost", "127.0.0.1"];
+  for (const port of LOGS_RUNNER_PORT_CANDIDATES) {
+    for (const host of hosts) {
+      const url = `http://${host}:${port}`;
+      if (await checkLogsRunnerHealth(url)) {
+        discoveredLogsRunnerUrl = url;
+        return url;
+      }
+    }
+  }
+  return null;
+}
+
+function getEffectiveLogsRunnerUrl(): string {
+  return discoveredLogsRunnerUrl ?? localLogsRunnerUrl;
+}
+
+export interface LocalLogsRunnerHealth {
+  reachable: boolean;
+  baseUrl: string | null;
+  error?: string;
+}
+
+async function requestLogsRunnerHealth(baseUrl: string): Promise<{
+  ok: boolean;
+  status: number;
+  data?: Record<string, unknown>;
+  error?: string;
+}> {
+  try {
+    const c = new AbortController();
+    const t = setTimeout(() => c.abort(), 2000);
+    const res = await fetch(`${baseUrl.replace(/\/$/, "")}/health`, {
+      method: "GET",
+      signal: c.signal,
+    });
+    clearTimeout(t);
+    const text = await res.text();
+    let data: Record<string, unknown> | undefined;
+    try {
+      data = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+    } catch {
+      data = undefined;
+    }
+    if (!res.ok) {
+      return {
+        ok: false,
+        status: res.status,
+        data,
+        error: (typeof data?.error === "string" ? data.error : undefined) ?? String(res.status),
+      };
+    }
+    return { ok: true, status: res.status, data };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/** Status des lokalen Logs Runners (für Badge im Logs-Tab). */
+export async function getLocalLogsRunnerHealth(): Promise<LocalLogsRunnerHealth> {
+  let base = getEffectiveLogsRunnerUrl().replace(/\/$/, "");
+  if (!base) {
+    const found = await discoverLogsRunnerUrl();
+    if (!found) {
+      return {
+        reachable: false,
+        baseUrl: null,
+        error: "Logs Runner nicht erreichbar.",
+      };
+    }
+    base = found.replace(/\/$/, "");
+  }
+
+  const out = await requestLogsRunnerHealth(base);
+  if (!out.ok) {
+    const found = await discoverLogsRunnerUrl();
+    if (found) {
+      const discovered = found.replace(/\/$/, "");
+      if (discovered !== base) {
+        base = discovered;
+        const retry = await requestLogsRunnerHealth(base);
+        if (retry.ok) {
+          return { reachable: true, baseUrl: base };
+        }
+      }
+    }
+    return {
+      reachable: false,
+      baseUrl: base || null,
+      error: out.error ?? "Logs Runner nicht erreichbar.",
+    };
+  }
+
+  return { reachable: true, baseUrl: base };
 }
 
 function resolvePreviewMode(previewMode?: PreviewMode): "local" | "central" | "deployed" {
@@ -1113,6 +1241,73 @@ async function localPreviewRefresh(
   return { success: true };
 }
 
+async function localPreviewCrawl(
+  projectId: string,
+  payload: {
+    screens: Array<{
+      id: string;
+      name: string;
+      path: string;
+      type?: string;
+      parentScreenId?: string;
+      parentPath?: string;
+      stateKey?: string;
+    }>;
+    maxScreens?: number;
+    maxClicksPerScreen?: number;
+  },
+): Promise<{ success: boolean; data?: RuntimeCrawlResult; error?: string }> {
+  const runId = getStoredRunId(projectId);
+  if (!runId) {
+    return {
+      success: false,
+      error: "Kein aktiver lokaler Preview-Run gefunden. Preview zuerst starten.",
+    };
+  }
+
+  let base = getEffectiveRunnerUrl().replace(/\/$/, "");
+  const doFetch = async (urlBase: string) =>
+    await fetch(`${urlBase}/crawl/${encodeURIComponent(runId)}`, {
+      method: "POST",
+      headers: runnerHeaders(projectId, true),
+      body: JSON.stringify(payload),
+    });
+
+  let res: Response;
+  try {
+    res = await doFetch(base);
+  } catch {
+    const found = await discoverRunnerUrl();
+    if (!found) {
+      return {
+        success: false,
+        error:
+          "Preview Runner nicht erreichbar. Läuft der Runner? (lokal: http://127.0.0.1:4000 oder http://localhost:4000)",
+      };
+    }
+    base = found.replace(/\/$/, "");
+    try {
+      res = await doFetch(base);
+    } catch {
+      return {
+        success: false,
+        error: `Preview Runner nicht erreichbar. Läuft der Runner? (lokal: ${base})`,
+      };
+    }
+  }
+  const text = await res.text();
+  let data: { success?: boolean; data?: RuntimeCrawlResult; error?: string };
+  try {
+    data = text ? (JSON.parse(text) as typeof data) : {};
+  } catch {
+    return { success: false, error: "Runner response not JSON" };
+  }
+  if (!res.ok) {
+    return { success: false, error: (data.error as string) || String(res.status) };
+  }
+  return { success: true, data: data.data };
+}
+
 /** Single log line from preview start/refresh (Runner or Edge). */
 export interface PreviewStepLog {
   time: string;
@@ -1255,6 +1450,36 @@ export const previewAPI = {
       return localPreviewRefresh(projectId);
     }
     return { success: false, error: "Refresh only with local runner (VITE_PREVIEW_RUNNER_URL)" };
+  },
+
+  /** Runtime verification crawl via local Preview Runner. */
+  crawl: async (
+    projectId: string,
+    payload: {
+      screens: Array<{
+        id: string;
+        name: string;
+        path: string;
+        type?: string;
+        parentScreenId?: string;
+        parentPath?: string;
+        stateKey?: string;
+      }>;
+      maxScreens?: number;
+      maxClicksPerScreen?: number;
+    },
+    previewMode?: PreviewMode,
+  ): Promise<{ success: boolean; data?: RuntimeCrawlResult; error?: string }> => {
+    const mode = resolvePreviewMode(previewMode);
+    if (mode !== "local") {
+      return {
+        success: false,
+        error: "Runtime-Crawl ist aktuell nur mit lokalem Preview Runner verfügbar.",
+      };
+    }
+    const guard = localRunnerGuard();
+    if (!guard.ok) return { success: false, error: guard.error };
+    return localPreviewCrawl(projectId, payload);
   },
 };
 

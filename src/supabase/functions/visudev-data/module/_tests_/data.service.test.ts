@@ -24,12 +24,14 @@ const logger = {
   debug: () => {},
 };
 
+const minimalConfig = {
+  supabase: {} as SupabaseClientLike,
+  logger,
+  config: { kvTableName: "kv_store_test" },
+};
+
 function setupModule(): void {
-  initModuleServices({
-    supabase: {} as SupabaseClientLike,
-    logger,
-    config: { kvTableName: "kv_store_test" },
-  });
+  initModuleServices(minimalConfig);
 }
 
 class StubRepository extends DataRepository {
@@ -101,7 +103,7 @@ Deno.test("DataService delegates schema methods to repository", async () => {
     migrations: [],
     erd: {},
   });
-  const service = new DataService(repo);
+  const service = new DataService(repo, minimalConfig);
 
   const schema = await service.getSchema("proj-1");
   const tables = schema.tables as string[] | undefined;
@@ -120,7 +122,7 @@ Deno.test("DataService delegates migrations + erd methods", async () => {
     migrations: [{ id: "001_init" }],
     erd: { nodes: [] },
   });
-  const service = new DataService(repo);
+  const service = new DataService(repo, minimalConfig);
 
   const migrations = await service.getMigrations("proj-2");
   assert(Array.isArray(migrations), "Expected migrations array");

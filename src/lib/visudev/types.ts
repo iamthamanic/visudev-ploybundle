@@ -1,3 +1,7 @@
+import type { AnalysisGraph, AnalysisQuality } from "./analysis-graph";
+import type { AnalysisEscalationJob } from "./escalation-jobs";
+import type { RuntimeCrawlResult } from "./runtime-crawl";
+
 // VisuDEV Core Types
 export type ScanStatus = "idle" | "running" | "completed" | "failed";
 export type ScreenshotStatus = "none" | "pending" | "ok" | "failed";
@@ -100,11 +104,19 @@ export interface Project {
   previewExpiresAt?: string;
   /** Commit SHA of last analysis (for Preview-Runner: start at this exact SHA) */
   lastAnalyzedCommitSha?: string;
+  analysisGraph?: AnalysisGraph;
+  analysisQuality?: AnalysisQuality;
+  analysisRuntime?: RuntimeCrawlResult;
+  analysisEscalations?: AnalysisEscalationJob[];
 }
 
 export interface AnalysisResult {
   screens: Screen[];
   flows: Flow[];
+  graph?: AnalysisGraph;
+  quality?: AnalysisQuality;
+  runtime?: RuntimeCrawlResult;
+  escalations?: AnalysisEscalationJob[];
   stats: {
     totalScreens: number;
     totalFlows: number;

@@ -41,23 +41,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session: s } }) => {
-      if (s?.access_token) {
-        const iss = getIssuerFromJwt(s.access_token);
-        if (shouldInvalidateSession(supabaseUrl, iss)) {
-          supabase.auth.signOut();
-          setSession(null);
-          setUser(null);
+    let cancelled = false;
+    /** Wenn getSession() nie zurückkommt (Netzwerk, blockierte Domain), UI sonst ewig „Wird geladen…“. */
+    const safetyMs = 15_000;
+    const safetyTimer = window.setTimeout(() => {
+      if (!cancelled) setLoading(false);
+    }, safetyMs);
+
+    supabase.auth
+      .getSession()
+      .then(({ data: { session: s } }) => {
+        if (cancelled) return;
+        if (s?.access_token) {
+          const iss = getIssuerFromJwt(s.access_token);
+          if (shouldInvalidateSession(supabaseUrl, iss)) {
+            void supabase.auth.signOut();
+            setSession(null);
+            setUser(null);
+          } else {
+            setSession(s);
+            setUser(s?.user ?? null);
+          }
         } else {
           setSession(s);
           setUser(s?.user ?? null);
         }
-      } else {
-        setSession(s);
-        setUser(s?.user ?? null);
-      }
-      setLoading(false);
-    });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSession(null);
+        setUser(null);
+      })
+      .finally(() => {
+        window.clearTimeout(safetyTimer);
+        if (!cancelled) setLoading(false);
+      });
 
     const {
       data: { subscription },
@@ -65,7 +83,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (s?.access_token) {
         const iss = getIssuerFromJwt(s.access_token);
         if (shouldInvalidateSession(supabaseUrl, iss)) {
-          supabase.auth.signOut();
+          void supabase.auth.signOut();
           setSession(null);
           setUser(null);
           return;
@@ -75,7 +93,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(s?.user ?? null);
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(safetyTimer);
+      subscription.unsubscribe();
+    };
   }, []);
 
   const signInWithPassword = useCallback(async (email: string, password: string) => {

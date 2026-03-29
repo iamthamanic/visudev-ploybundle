@@ -41,7 +41,9 @@ const host = parseHost(process.env.VITE_HOST, "127.0.0.1");
 const hostForUrl = host.includes(":") ? `[${host}]` : host;
 const requestedVitePort = parsePort(process.env.VITE_PORT, 3005, "VITE_PORT");
 const requestedRunnerPort = parsePort(process.env.PREVIEW_RUNNER_PORT, 4000, "PREVIEW_RUNNER_PORT");
+const requestedLogsRunnerPort = parsePort(process.env.LOGS_RUNNER_PORT, 5000, "LOGS_RUNNER_PORT");
 const reuseExistingRunner = process.env.REUSE_PREVIEW_RUNNER === "1";
+const reuseExistingLogsRunner = process.env.REUSE_LOGS_RUNNER === "1";
 
 function tryListen(port, hostToCheck) {
   return new Promise((resolve) => {
@@ -91,6 +93,119 @@ async function findFreeRunnerPort() {
     if (await isPortFree(candidate)) return candidate;
   }
   return findFreePort(4100);
+}
+
+const LOGS_RUNNER_PORT_CANDIDATES = [requestedLogsRunnerPort, 5010, 5020, 5030].filter(
+  (p, i, a) => a.indexOf(p) === i,
+);
+
+async function findFreeLogsRunnerPort() {
+  for (const candidate of LOGS_RUNNER_PORT_CANDIDATES) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await isPortFree(candidate)) return candidate;
+  }
+  return findFreePort(5000);
+}
+
+function findExistingLogsRunner() {
+  return new Promise((resolve) => {
+    let i = 0;
+    function tryNext() {
+      if (i >= LOGS_RUNNER_PORT_CANDIDATES.length) {
+        resolve(null);
+        return;
+      }
+      const port = LOGS_RUNNER_PORT_CANDIDATES[i++];
+      const url = `http://${hostForUrl}:${port}`;
+      const opts = { hostname: host, port, path: "/health", method: "GET" };
+      const req = http.request(opts, (res) => {
+        res.resume();
+        if (res.statusCode === 200) resolve(url);
+        else tryNext();
+      });
+      req.on("error", () => tryNext());
+      req.setTimeout(2000, () => {
+        req.destroy();
+        tryNext();
+      });
+      req.end();
+    }
+    tryNext();
+  });
+}
+
+function waitForLogsRunner(url, maxAttempts = 20, intervalMs = 300) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const opts = { hostname: u.hostname, port: u.port, path: "/health", method: "GET" };
+    let attempts = 0;
+    let destroyedByTimeout = false;
+    const tryOnce = () => {
+      attempts += 1;
+      destroyedByTimeout = false;
+      const req = http.request(opts, (res) => {
+        res.resume();
+        if (res.statusCode === 200) {
+          resolve();
+          return;
+        }
+        if (attempts >= maxAttempts) {
+          reject(new Error(`Logs Runner ${url} nicht bereit nach ${maxAttempts} Versuchen`));
+          return;
+        }
+        setTimeout(tryOnce, intervalMs);
+      });
+      req.on("error", () => {
+        if (destroyedByTimeout) return;
+        if (attempts >= maxAttempts) {
+          reject(new Error("Logs Runner nicht erreichbar."));
+          return;
+        }
+        setTimeout(tryOnce, intervalMs);
+      });
+      req.setTimeout(intervalMs, () => {
+        destroyedByTimeout = true;
+        req.destroy();
+        if (attempts >= maxAttempts) reject(new Error("Logs Runner Timeout"));
+        else setTimeout(tryOnce, intervalMs);
+      });
+      req.end();
+    };
+    tryOnce();
+  });
+}
+
+async function getOrStartLogsRunner() {
+  const existing = await findExistingLogsRunner();
+  if (existing && reuseExistingLogsRunner) {
+    console.log(`[dev-auto] Vorhandenen Logs Runner gefunden: ${existing}`);
+    return { logsRunnerUrl: existing, logsRunner: null };
+  }
+  if (existing && !reuseExistingLogsRunner) {
+    console.log(
+      `[dev-auto] Logs Runner gefunden (${existing}), wird ignoriert (REUSE_LOGS_RUNNER=1 zum Wiederverwenden).`,
+    );
+  }
+  const logsRunnerPort = await findFreeLogsRunnerPort();
+  const logsRunnerUrl = `http://${hostForUrl}:${logsRunnerPort}`;
+  const envForLogsRunner = { ...process.env, PORT: String(logsRunnerPort) };
+  console.log(`[dev-auto] Logs Runner: ${logsRunnerUrl}`);
+  const logsRunnerScript = path.join(__dirname, "run-logs-runner.js");
+  const logsRunner = spawn(process.execPath, [logsRunnerScript], {
+    env: envForLogsRunner,
+    stdio: "inherit",
+  });
+  logsRunner.on("error", (err) => {
+    console.error("[dev-auto] Logs Runner spawn failed:", err.message);
+    process.exit(1);
+  });
+  await waitForLogsRunner(logsRunnerUrl).catch((err) => {
+    console.error("[dev-auto] Logs Runner nicht bereit:", err.message);
+    logsRunner.kill("SIGTERM");
+    process.exit(1);
+  });
+  console.log("[dev-auto] Logs Runner bereit.");
+  return { logsRunnerUrl, logsRunner };
 }
 
 /** Prüft, ob auf einem der Kandidaten-Ports bereits ein Runner /health antwortet (z. B. npx visudev-runner). */
@@ -219,15 +334,20 @@ async function getOrStartRunner() {
     runner.kill("SIGTERM");
     process.exit(1);
   });
-  console.log("[dev-auto] Runner bereit, starte Vite …");
+  console.log("[dev-auto] Runner bereit.");
   return { previewUrl, runner };
 }
 
-/** Start Vite with runner URL and wire shutdown on signals/child exit. */
-function runViteWithShutdown(previewUrl, runner, vitePort) {
-  const envForVite = { ...process.env, VITE_PREVIEW_RUNNER_URL: previewUrl };
+/** Start Vite with runner URLs and wire shutdown on signals/child exit. */
+function runViteWithShutdown(previewUrl, runner, logsRunnerUrl, logsRunner, vitePort) {
+  const envForVite = {
+    ...process.env,
+    VITE_PREVIEW_RUNNER_URL: previewUrl,
+    VITE_LOGS_RUNNER_URL: logsRunnerUrl || "",
+  };
   console.log(`[dev-auto] Vite: http://${hostForUrl}:${vitePort}`);
   console.log(`[dev-auto] VITE_PREVIEW_RUNNER_URL=${previewUrl}`);
+  if (logsRunnerUrl) console.log(`[dev-auto] VITE_LOGS_RUNNER_URL=${logsRunnerUrl}`);
 
   const vite = spawn(
     "npx",
@@ -240,6 +360,7 @@ function runViteWithShutdown(previewUrl, runner, vitePort) {
     if (shuttingDown) return;
     shuttingDown = true;
     if (runner && !runner.killed) runner.kill(signal);
+    if (logsRunner && !logsRunner.killed) logsRunner.kill(signal);
     if (!vite.killed) vite.kill(signal);
   };
 
@@ -250,6 +371,15 @@ function runViteWithShutdown(previewUrl, runner, vitePort) {
     runner.on("exit", (code) => {
       if (!shuttingDown) {
         console.error(`[dev-auto] Runner exited (code ${code ?? "unknown"}). Stopping Vite.`);
+        shutdown("SIGTERM");
+        process.exit(code ?? 1);
+      }
+    });
+  }
+  if (logsRunner) {
+    logsRunner.on("exit", (code) => {
+      if (!shuttingDown) {
+        console.error(`[dev-auto] Logs Runner exited (code ${code ?? "unknown"}). Stopping Vite.`);
         shutdown("SIGTERM");
         process.exit(code ?? 1);
       }
@@ -268,7 +398,9 @@ function runViteWithShutdown(previewUrl, runner, vitePort) {
 async function main() {
   const vitePort = await findFreePort(requestedVitePort);
   const { previewUrl, runner } = await getOrStartRunner();
-  runViteWithShutdown(previewUrl, runner, vitePort);
+  const { logsRunnerUrl, logsRunner } = await getOrStartLogsRunner();
+  console.log("[dev-auto] Starte Vite …");
+  runViteWithShutdown(previewUrl, runner, logsRunnerUrl, logsRunner, vitePort);
 }
 
 main().catch((err) => {

@@ -6,7 +6,7 @@
 
 import { useRef, useState, useEffect, useMemo, useCallback } from "react";
 import clsx from "clsx";
-import type { Screen, Flow, StepLogEntry } from "../../../lib/visudev/types";
+import type { Screen, Flow, StepLogEntry, Project } from "../../../lib/visudev/types";
 import type { PreviewStepLog } from "../../../utils/api";
 import type { VisudevDomReport } from "../types";
 import {
@@ -19,10 +19,16 @@ import {
   type GraphEdge,
   type NodePosition,
 } from "../layout";
+import {
+  buildEdgeAnalysisMeta,
+  buildFlowAnalysisSummary,
+  buildNodeAnalysisBadges,
+} from "../services/analysis-status";
 import { useScreenLoadState, SCREEN_FAIL_REASONS } from "../hooks/useScreenLoadState";
 import { usePreviewPostMessage } from "../hooks/usePreviewPostMessage";
 import { FlowNodeCard } from "./FlowNodeCard";
 import { CanvasToolbar } from "./CanvasToolbar";
+import { EscalationPanel } from "./EscalationPanel";
 import { FlowEdgesLayer } from "./FlowEdgesLayer";
 import { PreviewTerminal } from "./PreviewTerminal";
 import styles from "../styles/LiveFlowCanvas.module.css";
@@ -54,6 +60,10 @@ interface LiveFlowCanvasProps {
   refreshInProgress?: boolean;
   /** Log-Einträge vom Preview-Start/Refresh (Runner/Edge). */
   refreshLogs?: PreviewStepLog[];
+  analysisGraph?: Project["analysisGraph"];
+  analysisQuality?: Project["analysisQuality"];
+  analysisRuntime?: Project["analysisRuntime"];
+  analysisEscalations?: Project["analysisEscalations"];
 }
 
 const POSITIONS_STORAGE_PREFIX = "visudev-flow-positions-";
@@ -69,6 +79,10 @@ export function LiveFlowCanvas({
   previewError,
   refreshInProgress = false,
   refreshLogs = [],
+  analysisGraph,
+  analysisQuality,
+  analysisRuntime,
+  analysisEscalations,
 }: LiveFlowCanvasProps) {
   const [zoom, setZoom] = useState(0.6);
   const [pan, setPan] = useState({ x: 40, y: 40 });
@@ -138,13 +152,34 @@ export function LiveFlowCanvas({
     return map;
   }, [screens, computedPositions, positionOverrides]);
   const edges = useMemo(() => buildEdges(screens, flows), [screens, flows]);
+  const nodeBadges = useMemo(() => buildNodeAnalysisBadges(analysisGraph), [analysisGraph]);
+  const edgeMetaByKey = useMemo(
+    () => buildEdgeAnalysisMeta(edges, analysisGraph),
+    [analysisGraph, edges],
+  );
+  const analysisSummary = useMemo(
+    () => buildFlowAnalysisSummary(analysisGraph, analysisQuality, analysisRuntime),
+    [analysisGraph, analysisQuality, analysisRuntime],
+  );
+  const visibleEscalations = useMemo(
+    () => (analysisEscalations ?? []).filter((job) => job.status === "pending").slice(0, 6),
+    [analysisEscalations],
+  );
   /** UI edges: navigate, open-modal, switch-tab (exclude call edges to avoid clutter). */
   const uiEdges = useMemo(() => edges.filter((e) => e.type !== "call"), [edges]);
-  /** First dom report that has navItems (Shell sidebar). Used when edge.fromId has no report so lines still start at tab positions. */
+  /** Report with navItems for tab positions. Prefer screen with path / or /projects (Shell); else first report with navItems. */
   const fallbackDomReport = useMemo(() => {
+    const withNav = (r: { navItems?: unknown[] }) => r.navItems && r.navItems.length > 0;
+    for (const screen of screens) {
+      const p = (screen.path ?? "").trim().toLowerCase();
+      if (p === "/" || p === "/projects") {
+        const report = domReportsByScreenId[screen.id];
+        if (report && withNav(report)) return report;
+      }
+    }
     const reports = Object.values(domReportsByScreenId);
-    return reports.find((r) => r.navItems && r.navItems.length > 0) ?? null;
-  }, [domReportsByScreenId]);
+    return reports.find((r) => withNav(r)) ?? null;
+  }, [domReportsByScreenId, screens]);
 
   /* Clear DOM reports when live preview ends (lines fall back to right edge until preview sends again). */
   useEffect(() => {
@@ -392,6 +427,21 @@ export function LiveFlowCanvas({
     [positions, zoom],
   );
 
+  const handleEscalationSelect = useCallback(
+    (job: NonNullable<Project["analysisEscalations"]>[number]) => {
+      if (job.sourceScreenId && job.targetScreenId) {
+        setSelectedEdgeKey(`${job.sourceScreenId}-${job.targetScreenId}`);
+      } else {
+        setSelectedEdgeKey(null);
+      }
+      const focusTarget = job.sourceScreenId ?? job.targetScreenId;
+      if (focusTarget) {
+        onNavigateToScreen(focusTarget);
+      }
+    },
+    [onNavigateToScreen],
+  );
+
   usePreviewPostMessage(
     iframeToScreenRef,
     screens,
@@ -413,6 +463,8 @@ export function LiveFlowCanvas({
 
   const loadingCount = screensWithUrl.filter((s) => screenLoadState[s.id] === "loading").length;
   const showProgress = totalWithUrl > 0 && (loadingCount > 0 || loadedCount < totalWithUrl);
+  const hasNavItemsForEdges = Boolean(fallbackDomReport?.navItems?.length);
+  const hasNavigateEdges = uiEdges.some((e) => e.type === "navigate");
 
   return (
     <div className={styles.root}>
@@ -430,7 +482,11 @@ export function LiveFlowCanvas({
         onToggleTerminal={() => setShowTerminal((v) => !v)}
         hasPositionOverrides={Object.keys(positionOverrides).length > 0}
         onResetPositions={() => setPositionOverrides({})}
+        showNavHint={hasNavigateEdges && !hasNavItemsForEdges}
+        analysisSummary={analysisSummary}
       />
+
+      <EscalationPanel jobs={visibleEscalations} onSelect={handleEscalationSelect} />
 
       {showTerminal && (
         <PreviewTerminal
@@ -476,6 +532,7 @@ export function LiveFlowCanvas({
                   loadState={screenLoadState[screen.id] ?? "loading"}
                   failReason={screenFailReason[screen.id]}
                   domReport={domReportsByScreenId[screen.id]}
+                  analysisBadge={nodeBadges[screen.id]}
                   onLoad={() => markScreenLoaded(screen.id, screen.name, "onLoad")}
                   onError={(reason, name, url) => markScreenFailed(screen.id, reason, name, url)}
                   registerIframe={(win, screenId) => iframeToScreenRef.current.set(win, screenId)}
@@ -501,6 +558,7 @@ export function LiveFlowCanvas({
             domReports={domReportsByScreenId}
             fallbackDomReport={fallbackDomReport}
             selectedEdgeKey={selectedEdgeKey}
+            edgeMetaByKey={edgeMetaByKey}
             onEdgeClick={handleEdgeClick}
           />
         </div>

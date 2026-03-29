@@ -4,9 +4,17 @@
  */
 import { assertEquals } from "std/assert";
 import type { FileContent } from "../dto/index.ts";
+import { NavigationLinkExtractor } from "./navigation-link-extractor.ts";
+import { PageLikeExtractor } from "./page-like-extractor.ts";
 import { ScreenExtractionService } from "./screen-extraction.service.ts";
+import { StateTargetExtractor } from "./state-target-extractor.ts";
 
-const service = new ScreenExtractionService();
+const nav = new NavigationLinkExtractor();
+const service = new ScreenExtractionService(
+  nav,
+  new StateTargetExtractor(),
+  new PageLikeExtractor(nav),
+);
 
 Deno.test("extractReactRouterScreens: nested routes get full path", () => {
   const jsx = `

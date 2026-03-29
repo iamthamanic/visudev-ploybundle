@@ -6,6 +6,7 @@ import type {
   UpdateMigrationsDto,
   UpdateSchemaDto,
 } from "../dto/index.ts";
+import type { DataModuleConfig } from "../interfaces/module.interface.ts";
 import { DataRepository } from "../internal/repositories/data.repository.ts";
 import { BaseService } from "./base.service.ts";
 
@@ -23,7 +24,10 @@ interface ErdNode {
 }
 
 export class DataService extends BaseService {
-  constructor(private readonly repository: DataRepository) {
+  constructor(
+    private readonly repository: DataRepository,
+    private readonly moduleConfig: DataModuleConfig,
+  ) {
     super();
   }
 
@@ -70,8 +74,8 @@ export class DataService extends BaseService {
 
   /**
    * Sync ERD from the project's connected Supabase DB (integrations.supabase).
-   * Fetches PostgREST OpenAPI spec and builds nodes/tables. Saves to KV.
-   * Returns the new ERD or throws if Supabase not connected / fetch failed.
+   * Uses injected openApiFetcher when provided (Dependency Inversion). No response bodies in logs/errors (Data Leakage).
+   * OpenAPI structure validated before mapping (Input Validation).
    */
   public async syncErdFromSupabase(projectId: string): Promise<ErdResponseDto> {
     this.logger.info("Syncing ERD from project Supabase", { projectId });
@@ -88,41 +92,26 @@ export class DataService extends BaseService {
 
     const restBase = url.replace(/\/$/, "") + "/rest/v1";
     const openApiUrl = `${restBase}/`;
+    const headers: Record<string, string> = {
+      Accept: "application/openapi+json",
+      apikey: serviceKey,
+      Authorization: `Bearer ${serviceKey}`,
+    };
 
-    let res: Response;
-    try {
-      res = await fetch(openApiUrl, {
-        method: "GET",
-        headers: {
-          Accept: "application/openapi+json",
-          apikey: serviceKey,
-          Authorization: `Bearer ${serviceKey}`,
-        },
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.logger.error("Fetch OpenAPI failed", { projectId, error: msg });
-      throw new Error(`Supabase schema fetch failed: ${msg}`);
-    }
-
-    if (!res.ok) {
-      const text = await res.text();
-      this.logger.error("OpenAPI response not ok", {
-        projectId,
-        status: res.status,
-        body: text.slice(0, 200),
-      });
-      throw new Error(
-        `Supabase schema fetch failed: ${res.status} ${text.slice(0, 100)}`,
-      );
-    }
-
+    const fetcher = this.moduleConfig.openApiFetcher ??
+      this.defaultOpenApiFetcher.bind(this);
     let openApi: Record<string, unknown>;
     try {
-      openApi = (await res.json()) as Record<string, unknown>;
-    } catch {
-      this.logger.error("OpenAPI parse failed", { projectId });
-      throw new Error("Supabase schema response was not JSON");
+      openApi = await fetcher(openApiUrl, headers);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.error("OpenAPI fetch failed", { projectId, error: msg });
+      throw new Error("Supabase schema fetch failed");
+    }
+
+    if (!this.isValidOpenApiShape(openApi)) {
+      this.logger.error("OpenAPI structure invalid", { projectId });
+      throw new Error("Supabase schema response had invalid structure");
     }
 
     const nodes = this.buildErdNodesFromOpenApi(openApi);
@@ -139,6 +128,40 @@ export class DataService extends BaseService {
       tableCount: nodes.length,
     });
     return erd;
+  }
+
+  /** Default fetcher: fetch + JSON; no response body in logs or thrown messages (Data Leakage). */
+  private async defaultOpenApiFetcher(
+    openApiUrl: string,
+    headers: Record<string, string>,
+  ): Promise<Record<string, unknown>> {
+    let res: Response;
+    try {
+      res = await fetch(openApiUrl, { method: "GET", headers });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(msg);
+    }
+    if (!res.ok) {
+      this.logger.error("OpenAPI response not ok", {
+        status: res.status,
+      });
+      throw new Error("Supabase schema fetch failed");
+    }
+    try {
+      return (await res.json()) as Record<string, unknown>;
+    } catch {
+      this.logger.error("OpenAPI parse failed");
+      throw new Error("Supabase schema response was not JSON");
+    }
+  }
+
+  /** Input Validation: ensure OpenAPI has paths and components.schemas (or at least paths). */
+  private isValidOpenApiShape(obj: Record<string, unknown>): boolean {
+    if (!obj || typeof obj !== "object") return false;
+    const paths = obj.paths;
+    if (paths === null || typeof paths !== "object") return false;
+    return true;
   }
 
   private buildErdNodesFromOpenApi(

@@ -7,7 +7,9 @@ import type {
 import { ScreenExtractionService } from "./screen-extraction.service.ts";
 
 export class ScreenService extends BaseService {
-  private readonly extractor = new ScreenExtractionService();
+  constructor(private readonly extractor: ScreenExtractionService) {
+    super();
+  }
 
   public extractScreens(files: FileContent[]): {
     screens: Screen[];

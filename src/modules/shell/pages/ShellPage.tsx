@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, lazy, Suspense } from "react";
 import { Loader2 } from "lucide-react";
 import { useAuth } from "../../../contexts/useAuth";
 import { useVisudev } from "../../../lib/visudev/store";
+import { RunnersTopBar } from "../components/RunnersTopBar";
 import { Sidebar, type NavItemRect } from "../components/Sidebar";
 import type { ShellScreen } from "../types";
 import styles from "../styles/ShellPage.module.css";
@@ -139,68 +140,71 @@ export function ShellPage() {
 
   return (
     <div className={styles.root}>
-      <Sidebar
-        activeScreen={activeScreen}
-        onNavigate={handleNavigate}
-        onNewProject={handleNewProject}
-        onDomReport={
-          typeof window !== "undefined" && window !== window.top
-            ? setNavItemsFromSidebar
-            : undefined
-        }
-      />
-
-      <main className={styles.main}>
-        <Suspense
-          fallback={
-            <div className={styles.suspenseFallback}>
-              <Loader2 className={styles.suspenseSpinner} aria-hidden="true" />
-              <p className={styles.suspenseText}>Lade...</p>
-            </div>
+      <RunnersTopBar />
+      <div className={styles.body}>
+        <Sidebar
+          activeScreen={activeScreen}
+          onNavigate={handleNavigate}
+          onNewProject={handleNewProject}
+          onDomReport={
+            typeof window !== "undefined" && window !== window.top
+              ? setNavItemsFromSidebar
+              : undefined
           }
-        >
-          {activeScreen === "projects" && (
-            <ProjectsPage
-              onProjectSelect={handleProjectSelect}
-              onNewProject={handleNewProject}
-              onOpenSettings={() => handleNavigate("settings")}
-            />
-          )}
+        />
 
-          {activeScreen === "appflow" && activeProject && (
-            <AppFlowPage
-              projectId={activeProject.id}
-              githubRepo={activeProject.github_repo}
-              githubBranch={activeProject.github_branch}
-            />
-          )}
-
-          {activeScreen === "blueprint" && activeProject && (
-            <BlueprintPage projectId={activeProject.id} />
-          )}
-
-          {activeScreen === "data" && activeProject && <DataPage projectId={activeProject.id} />}
-
-          {activeScreen === "logs" && activeProject && <LogsPage projectId={activeProject.id} />}
-
-          {activeScreen === "settings" && <SettingsPage project={activeProject ?? null} />}
-
-          {!activeProject && activeScreen !== "projects" && (
-            <div className={styles.emptyState}>
-              <div className={styles.emptyCard}>
-                <p className={styles.emptyTitle}>Kein Projekt ausgewählt</p>
-                <button
-                  type="button"
-                  onClick={() => handleNavigate("projects")}
-                  className={styles.emptyAction}
-                >
-                  Projekt auswählen
-                </button>
+        <main className={styles.main}>
+          <Suspense
+            fallback={
+              <div className={styles.suspenseFallback}>
+                <Loader2 className={styles.suspenseSpinner} aria-hidden="true" />
+                <p className={styles.suspenseText}>Lade...</p>
               </div>
-            </div>
-          )}
-        </Suspense>
-      </main>
+            }
+          >
+            {activeScreen === "projects" && (
+              <ProjectsPage
+                onProjectSelect={handleProjectSelect}
+                onNewProject={handleNewProject}
+                onOpenSettings={() => handleNavigate("settings")}
+              />
+            )}
+
+            {activeScreen === "appflow" && activeProject && (
+              <AppFlowPage
+                projectId={activeProject.id}
+                githubRepo={activeProject.github_repo}
+                githubBranch={activeProject.github_branch}
+              />
+            )}
+
+            {activeScreen === "blueprint" && activeProject && (
+              <BlueprintPage projectId={activeProject.id} />
+            )}
+
+            {activeScreen === "data" && activeProject && <DataPage projectId={activeProject.id} />}
+
+            {activeScreen === "logs" && activeProject && <LogsPage projectId={activeProject.id} />}
+
+            {activeScreen === "settings" && <SettingsPage project={activeProject ?? null} />}
+
+            {!activeProject && activeScreen !== "projects" && (
+              <div className={styles.emptyState}>
+                <div className={styles.emptyCard}>
+                  <p className={styles.emptyTitle}>Kein Projekt ausgewählt</p>
+                  <button
+                    type="button"
+                    onClick={() => handleNavigate("projects")}
+                    className={styles.emptyAction}
+                  >
+                    Projekt auswählen
+                  </button>
+                </div>
+              </div>
+            )}
+          </Suspense>
+        </main>
+      </div>
     </div>
   );
 }

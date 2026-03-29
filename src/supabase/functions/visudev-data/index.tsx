@@ -12,7 +12,10 @@ import { cors } from "hono/cors";
 import { createClient } from "@jsr/supabase__supabase-js";
 import { createDataModule } from "./module/index.ts";
 import type { LoggerLike } from "./module/interfaces/module.interface.ts";
-import { ModuleException } from "./module/internal/exceptions/index.ts";
+import {
+  ForbiddenException,
+  ModuleException,
+} from "./module/internal/exceptions/index.ts";
 import type { ErrorResponse } from "./module/types/index.ts";
 
 interface EnvConfig {
@@ -66,24 +69,30 @@ async function getProjectOwnerId(projectId: string): Promise<string | null> {
   return value?.ownerId ?? null;
 }
 
-app.use("*", async (c, next) => {
-  const projectId = c.req.param("projectId");
-  if (!projectId) return next();
+/* Project access enforced only in controller via assertProjectAccess (YAGNI: no duplicate middleware). */
+
+async function assertProjectAccess(
+  projectId: string,
+  c: import("hono").Context,
+): Promise<void> {
   const ownerId = await getProjectOwnerId(projectId);
   const userId = await getUserIdOptional(c);
   if (userId === null) {
-    return c.json({ success: false, error: "Forbidden" }, 403);
+    throw new ForbiddenException("Not authorized to access this project");
   }
-  if (ownerId != null && userId !== ownerId) {
-    return c.json({ success: false, error: "Forbidden" }, 403);
+  if (ownerId == null || ownerId === "") {
+    throw new ForbiddenException("Not authorized to access this project");
   }
-  return next();
-});
+  if (userId !== ownerId) {
+    throw new ForbiddenException("Not authorized to access this project");
+  }
+}
 
 const dataModule = createDataModule({
   supabase,
   logger,
   config: { kvTableName: env.kvTableName },
+  assertProjectAccess,
 });
 
 dataModule.registerRoutes(app);
