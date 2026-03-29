@@ -1,0 +1,161 @@
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.notice {
+  background-color: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-muted-foreground);
+  padding: 1rem 1.25rem;
+}
+
+.grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+}
+
+.fieldStack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.fieldLabel {
+  color: var(--color-foreground);
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.fieldHint {
+  color: var(--color-muted-foreground);
+  font-size: 0.8125rem;
+}
+
+.providerHeader {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.providerName {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.5rem;
+}
+
+.providerMeta {
+  color: var(--color-muted-foreground);
+  display: flex;
+  flex-direction: column;
+  font-size: 0.8125rem;
+  gap: 0.25rem;
+}
+
+.linkButton {
+  align-items: center;
+  color: var(--color-primary);
+  display: inline-flex;
+  font-size: 0.8125rem;
+  gap: 0.35rem;
+  text-decoration: none;
+}
+
+.linkButton:hover {
+  text-decoration: underline;
+}
+
+.statusRow {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.errorBox {
+  background-color: var(--color-danger-soft);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-sm);
+  color: var(--color-danger);
+  font-size: 0.875rem;
+  padding: 0.75rem 0.875rem;
+}
+
+.successBox {
+  background-color: var(--color-success-soft);
+  border: 1px solid var(--color-success);
+  border-radius: var(--radius-sm);
+  color: var(--color-success);
+  font-size: 0.875rem;
+  padding: 0.75rem 0.875rem;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.secondaryActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 0.25rem;
+}
+
+.buttonIcon {
+  height: 1rem;
+  width: 1rem;
+}
+
+.selectWrap {
+  min-width: 0;
+}
+
+.cardContent {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.settingsCardContent {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+}
+
+.settingsFooter {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.checkboxRow {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+}
+
+.checkbox {
+  accent-color: var(--color-primary);
+  height: 1rem;
+  width: 1rem;
+}
+
+.emptyModels {
+  color: var(--color-muted-foreground);
+  font-size: 0.875rem;
+}
+
+@media (max-width: 640px) {
+  .settingsFooter {
+    justify-content: stretch;
+  }
+
+  .settingsFooter :global([data-slot="button"]) {
+    width: 100%;
+  }
+}

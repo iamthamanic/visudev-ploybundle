@@ -9,6 +9,12 @@ import type {
   IntegrationsUpdateInput,
   GitHubRepo,
 } from "../lib/visudev/integrations";
+import type {
+  LlmProviderId,
+  LlmProviderSettings,
+  LlmProviderState,
+  LlmProviderTestResult,
+} from "../lib/visudev/llm-providers";
 import type { RuntimeCrawlResult } from "../lib/visudev/runtime-crawl";
 import type { PreviewMode, Project } from "../lib/visudev/types";
 import type {
@@ -268,6 +274,59 @@ export const accountAPI = {
     apiRequest(`/visudev-account/${userId}/preferences`, {
       method: "PUT",
       body: JSON.stringify(data),
+    }),
+};
+
+// ==================== LLM PROVIDERS ====================
+
+export const llmProvidersAPI = {
+  getProviders: (accessToken: string) =>
+    apiRequest<LlmProviderState[]>("/visudev-llm-providers/providers", {
+      accessToken,
+    }),
+
+  getSettings: (accessToken: string) =>
+    apiRequest<LlmProviderSettings>("/visudev-llm-providers/settings", {
+      accessToken,
+    }),
+
+  updateSettings: (accessToken: string, data: Partial<LlmProviderSettings>) =>
+    apiRequest<LlmProviderSettings>("/visudev-llm-providers/settings", {
+      method: "PUT",
+      body: JSON.stringify(data),
+      accessToken,
+    }),
+
+  testProvider: (providerId: LlmProviderId, accessToken: string, apiKey?: string) =>
+    apiRequest<LlmProviderTestResult>(`/visudev-llm-providers/providers/${providerId}/test`, {
+      method: "POST",
+      body: JSON.stringify(apiKey ? { apiKey } : {}),
+      accessToken,
+    }),
+
+  saveProviderKey: (
+    providerId: LlmProviderId,
+    accessToken: string,
+    apiKey: string,
+    selectedModel?: string,
+  ) =>
+    apiRequest<LlmProviderState>(`/visudev-llm-providers/providers/${providerId}/key`, {
+      method: "PUT",
+      body: JSON.stringify({ apiKey, selectedModel }),
+      accessToken,
+    }),
+
+  saveProviderSelection: (providerId: LlmProviderId, accessToken: string, selectedModel: string) =>
+    apiRequest<LlmProviderState>(`/visudev-llm-providers/providers/${providerId}/selection`, {
+      method: "PUT",
+      body: JSON.stringify({ selectedModel }),
+      accessToken,
+    }),
+
+  deleteProviderKey: (providerId: LlmProviderId, accessToken: string) =>
+    apiRequest(`/visudev-llm-providers/providers/${providerId}/key`, {
+      method: "DELETE",
+      accessToken,
     }),
 };
 
@@ -1491,6 +1550,7 @@ export const api = {
   data: dataAPI,
   logs: logsAPI,
   account: accountAPI,
+  llmProviders: llmProvidersAPI,
   integrations: integrationsAPI,
   preview: previewAPI,
 };

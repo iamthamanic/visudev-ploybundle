@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
+  Bot,
   Check,
   CheckCircle,
   Copy,
@@ -41,10 +42,11 @@ import {
   DialogTitle,
 } from "../../../components/ui/dialog";
 import { IntegrationsPanel } from "../../../components/IntegrationsPanel";
+import { LlmIntegrationsPanel } from "../components/LlmIntegrationsPanel";
 import { projectId as supabaseProjectId, supabaseUrl } from "../../../utils/supabase/info";
 import styles from "../styles/SettingsPage.module.css";
 
-type SettingsTab = "profile" | "connections" | "project" | "integrations";
+type SettingsTab = "profile" | "connections" | "integrations" | "project" | "project-integrations";
 
 interface SettingsPageProps {
   project: Project | null;
@@ -203,10 +205,11 @@ export function SettingsPage({ project }: SettingsPageProps) {
   const tabs: { key: SettingsTab; label: string; icon: typeof User }[] = [
     { key: "profile", label: "Profil", icon: User },
     { key: "connections", label: "Verbindungen", icon: Github },
+    { key: "integrations", label: "Integrationen", icon: Bot },
   ];
   if (project) {
     tabs.push({ key: "project", label: "Projekt", icon: Database });
-    tabs.push({ key: "integrations", label: "Projekt-Anbindungen", icon: Link2 });
+    tabs.push({ key: "project-integrations", label: "Projekt-Anbindungen", icon: Link2 });
   }
 
   return (
@@ -444,7 +447,18 @@ export function SettingsPage({ project }: SettingsPageProps) {
         </section>
       )}
 
-      {activeTab === "integrations" && project && (
+      {activeTab === "integrations" && (
+        <section className={styles.section} role="tabpanel">
+          <h2 className={styles.sectionTitle}>Integrationen</h2>
+          <p className={styles.caption}>
+            API-Keys und Standard-Modelle für die ergänzende LLM-Auswertung von Analyse-Konflikten
+            verwalten.
+          </p>
+          <LlmIntegrationsPanel />
+        </section>
+      )}
+
+      {activeTab === "project-integrations" && project && (
         <section className={styles.section} role="tabpanel">
           <h2 className={styles.sectionTitle}>Projekt-Anbindungen</h2>
           <p className={styles.caption}>

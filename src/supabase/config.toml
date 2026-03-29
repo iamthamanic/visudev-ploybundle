@@ -11,6 +11,10 @@ verify_jwt = false
 entrypoint = "./functions/visudev-integrations/index.tsx"
 verify_jwt = false
 
+[functions.visudev-llm-providers]
+entrypoint = "./functions/visudev-llm-providers/index.tsx"
+verify_jwt = false
+
 [functions.visudev-data]
 entrypoint = "./functions/visudev-data/index.tsx"
 verify_jwt = false
